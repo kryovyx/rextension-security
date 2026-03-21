@@ -10,7 +10,7 @@ package security
 import (
 	"sync"
 
-	"github.com/kryovyx/rex/route"
+	rxevent "github.com/kryovyx/rextension/event"
 )
 
 // Context keys for security data in request context.
@@ -59,7 +59,7 @@ func newSecuredRouteIndex() *securedRouteIndex {
 	return &securedRouteIndex{routes: make(map[string]SecuredRoute)}
 }
 
-func (ri *securedRouteIndex) register(rt route.Route) {
+func (ri *securedRouteIndex) register(rt rxevent.Route) {
 	if sr, ok := rt.(SecuredRoute); ok {
 		key := rt.Method() + " " + rt.Path()
 		ri.mu.Lock()

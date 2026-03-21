@@ -15,8 +15,8 @@ package security
 import (
 	"context"
 
-	"github.com/kryovyx/rex/event"
 	rx "github.com/kryovyx/rextension"
+	rxevent "github.com/kryovyx/rextension/event"
 )
 
 // SecurityExtension implements the Rex extension contract for authentication.
@@ -50,8 +50,8 @@ func (e *SecurityExtension) OnInitialize(ctx context.Context, r rx.Rex) error {
 	e.registry = newSchemeRegistry(e.cfg.Schemes)
 
 	// Subscribe to route registration events to build the secured route index.
-	r.EventBus().Subscribe(event.RouterRouteRegisteredEventType, func(ev event.Event) {
-		if routeEv, ok := event.As[event.RouterRouteRegisteredEvent](ev); ok {
+	r.EventBus().Subscribe(rxevent.EventTypeRouterRouteRegistered, func(ev rxevent.Event) {
+			if routeEv, ok := rxevent.As[rxevent.RouterRouteRegisteredEvent](ev); ok {
 			e.index.register(routeEv.Route)
 			if sr, isSec := routeEv.Route.(SecuredRoute); isSec {
 				e.logger.Info("Registered security for route %s %s: schemes=%v",
