@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kryovyx/rex/route"
+	rxroute "github.com/kryovyx/rextension/route"
 
 	security "github.com/kryovyx/rextension-security"
 )
@@ -16,7 +16,7 @@ import (
 // Mock types
 // ---------------------------------------------------------------------------
 
-// mockSecuredRoute implements both route.Route and security.SecuredRoute.
+// mockSecuredRoute implements both rxroute.Route and security.SecuredRoute.
 type mockSecuredRoute struct {
 	method  string
 	path    string
@@ -25,10 +25,10 @@ type mockSecuredRoute struct {
 
 func (m *mockSecuredRoute) Method() string             { return m.method }
 func (m *mockSecuredRoute) Path() string               { return m.path }
-func (m *mockSecuredRoute) Handler() route.HandlerFunc { return nil }
+func (m *mockSecuredRoute) Handler() rxroute.HandlerFunc { return nil }
 func (m *mockSecuredRoute) RequiredSchemes() []string  { return m.schemes }
 
-// mockPlainRoute implements route.Route but NOT SecuredRoute.
+// mockPlainRoute implements rxroute.Route but NOT SecuredRoute.
 type mockPlainRoute struct {
 	method string
 	path   string
@@ -36,13 +36,13 @@ type mockPlainRoute struct {
 
 func (m *mockPlainRoute) Method() string             { return m.method }
 func (m *mockPlainRoute) Path() string               { return m.path }
-func (m *mockPlainRoute) Handler() route.HandlerFunc { return nil }
+func (m *mockPlainRoute) Handler() rxroute.HandlerFunc { return nil }
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-func buildMiddleware(schemes []security.SecurityScheme, routes []route.Route) func(http.Handler) http.Handler {
+func buildMiddleware(schemes []security.SecurityScheme, routes []rxroute.Route) func(http.Handler) http.Handler {
 	cfg := security.NewTestMiddlewareConfig(schemes, routes)
 	return security.SecurityMiddleware(cfg)
 }
@@ -83,7 +83,7 @@ func TestSecurityMiddleware_RouteNotInIndex(t *testing.T) {
 
 func TestSecurityMiddleware_PlainRouteNotIndexed(t *testing.T) {
 	plainRoute := &mockPlainRoute{method: "GET", path: "/public"}
-	mw := buildMiddleware(nil, []route.Route{plainRoute})
+	mw := buildMiddleware(nil, []rxroute.Route{plainRoute})
 
 	called := false
 	handler := mw(nextOK(&called))
@@ -105,7 +105,7 @@ func TestSecurityMiddleware_PlainRouteNotIndexed(t *testing.T) {
 
 func TestSecurityMiddleware_EmptyRequiredSchemes(t *testing.T) {
 	secRoute := &mockSecuredRoute{method: "GET", path: "/open", schemes: []string{}}
-	mw := buildMiddleware(nil, []route.Route{secRoute})
+	mw := buildMiddleware(nil, []rxroute.Route{secRoute})
 
 	called := false
 	handler := mw(nextOK(&called))
@@ -133,7 +133,7 @@ func TestSecurityMiddleware_AuthSuccess(t *testing.T) {
 	secRoute := &mockSecuredRoute{method: "GET", path: "/protected", schemes: []string{"bearer"}}
 	mw := buildMiddleware(
 		[]security.SecurityScheme{scheme},
-		[]route.Route{secRoute},
+		[]rxroute.Route{secRoute},
 	)
 
 	var capturedPrincipal interface{}
@@ -172,7 +172,7 @@ func TestSecurityMiddleware_AuthFailure(t *testing.T) {
 	secRoute := &mockSecuredRoute{method: "POST", path: "/secret", schemes: []string{"bearer"}}
 	mw := buildMiddleware(
 		[]security.SecurityScheme{scheme},
-		[]route.Route{secRoute},
+		[]rxroute.Route{secRoute},
 	)
 
 	called := false
@@ -206,7 +206,7 @@ func TestSecurityMiddleware_AuthFailure_MissingHeader(t *testing.T) {
 	secRoute := &mockSecuredRoute{method: "GET", path: "/guarded", schemes: []string{"bearer"}}
 	mw := buildMiddleware(
 		[]security.SecurityScheme{scheme},
-		[]route.Route{secRoute},
+		[]rxroute.Route{secRoute},
 	)
 
 	called := false
@@ -234,7 +234,7 @@ func TestSecurityMiddleware_UnknownScheme(t *testing.T) {
 	secRoute := &mockSecuredRoute{method: "GET", path: "/mystery", schemes: []string{"nonexistent"}}
 	mw := buildMiddleware(
 		nil, // no schemes registered
-		[]route.Route{secRoute},
+		[]rxroute.Route{secRoute},
 	)
 
 	called := false
@@ -275,7 +275,7 @@ func TestSecurityMiddleware_MultipleSchemes_AllSucceed(t *testing.T) {
 	}
 	mw := buildMiddleware(
 		[]security.SecurityScheme{bearerScheme, apiKeyScheme},
-		[]route.Route{secRoute},
+		[]rxroute.Route{secRoute},
 	)
 
 	var capturedPrincipal interface{}
@@ -324,7 +324,7 @@ func TestSecurityMiddleware_MultipleSchemes_SecondFails(t *testing.T) {
 	}
 	mw := buildMiddleware(
 		[]security.SecurityScheme{bearerScheme, apiKeyScheme},
-		[]route.Route{secRoute},
+		[]rxroute.Route{secRoute},
 	)
 
 	called := false
@@ -357,7 +357,7 @@ func TestSecurityMiddleware_DifferentMethods(t *testing.T) {
 
 	mw := buildMiddleware(
 		[]security.SecurityScheme{scheme},
-		[]route.Route{getRoute},
+		[]rxroute.Route{getRoute},
 	)
 
 	// GET /resource without auth -> 401
@@ -393,7 +393,7 @@ func TestSecurityMiddleware_BasicScheme(t *testing.T) {
 	secRoute := &mockSecuredRoute{method: "GET", path: "/basic", schemes: []string{"basic"}}
 	mw := buildMiddleware(
 		[]security.SecurityScheme{scheme},
-		[]route.Route{secRoute},
+		[]rxroute.Route{secRoute},
 	)
 
 	var capturedPrincipal interface{}
