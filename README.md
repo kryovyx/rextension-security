@@ -3,7 +3,7 @@
 A pluggable authentication and authorization extension for the Rex framework.
 
 [![Go Version](https://img.shields.io/badge/go-1.26+-blue.svg)](https://golang.org/dl/)
-[![Coverage](https://img.shields.io/badge/coverage-78.2%25-green.svg)](#)
+[![Coverage](https://img.shields.io/badge/coverage-83.2%25-green.svg)](#)
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 ## Overview
@@ -11,7 +11,7 @@ A pluggable authentication and authorization extension for the Rex framework.
 `rextension-security` is a Rex extension that provides:
 
 - **Pluggable SecurityScheme interface** for custom authentication strategies
-- **Built-in schemes**: Bearer token, HTTP Basic, and API key authentication
+- **Built-in schemes**: Bearer token, HTTP Basic, API key, and session cookie authentication
 - **Per-route security requirements** via the `SecuredRoute` interface
 - **Auto-registered middleware** that gates requests to secured routes
 - **WWW-Authenticate challenge headers** on 401 responses
@@ -169,10 +169,11 @@ apiKeyQuery := security.NewAPIKeyScheme("apikey-query", "api_key", security.APIK
 |---------------------------------------------------------|--------------------------------------|
 | `NewAPIKeyScheme(name, paramName, location, validateFunc)` | Creates an API key scheme         |
 
-| Location Constant     | Description                        |
-|-----------------------|------------------------------------|
-| `security.APIKeyHeader` | Key expected in an HTTP header   |
-| `security.APIKeyQuery`  | Key expected in a query parameter|
+| Location Constant      | Description                                              |
+|------------------------|----------------------------------------------------------|
+| `security.APIKeyHeader` | Key expected in an HTTP header                         |
+| `security.APIKeyQuery`  | Key expected in a query parameter                      |
+| `security.APIKeyCookie` | Key expected as an HTTP cookie (BFF session cookie use case) |
 
 ## Secured Routes
 
@@ -279,9 +280,109 @@ No additional configuration is needed — just register both extensions and the 
 3. **Return rich principals**: Return structs with user details rather than plain strings for easier downstream use with `GetPrincipalAs`
 4. **Handle multiple schemes carefully**: When a route requires multiple schemes, all must authenticate successfully
 5. **Keep validate functions fast**: Authentication runs on every request to secured routes — avoid expensive operations or cache results
-6. **Use appropriate scheme types**: Bearer for JWT/OAuth tokens, Basic for simple credentials, API Key for service-to-service auth
+6. **Use appropriate scheme types**: Bearer for JWT/OAuth tokens, Basic for simple credentials, API Key for service-to-service auth, Session Cookie for BFF services
 7. **Set descriptions for OpenAPI**: Use `SetDescription()` on schemes to provide clear documentation for API consumers
 8. **Leverage type-safe principals**: Use `GetPrincipalAs[T]` instead of manual type assertions for cleaner handler code
+
+### Session Cookie (BFF)
+
+Designed for **Backend-For-Frontend** services: the BFF holds user sessions internally (backed by an OAuth system), and the browser only sees an opaque session cookie. Any internal OAuth token exchange or session-store lookup happens inside the `validate` function.
+
+```go
+// One shared scheme wired to a session store.
+store := myapp.NewSessionStore()   // any SessionStore implementation
+scheme := security.NewSessionCookieScheme("session", "session_id", nil).
+    WithStore(store).
+    WithCookieOptions(security.CookieOptions{
+        HttpOnly: true,
+        Secure:   true,   // always in production
+        MaxAge:   3600,   // 1 hour
+        Path:     "/",
+    })
+
+// Login handler — POST /auth/login
+func (r *LoginRoute) Handler() route.HandlerFunc {
+    return func(ctx route.Context) {
+        // exchange credentials with OAuth server, receive principal
+        principal, err := oauthClient.AuthenticateUser(username, password)
+        if err != nil {
+            ctx.JSON(401, dto.ErrorResponse{Error: "invalid credentials"})
+            return
+        }
+        // creates session ID, calls store.Set, writes Set-Cookie
+        if _, err := scheme.IssueSession(ctx.Request().Context(), ctx.ResponseWriter(), principal); err != nil {
+            ctx.JSON(500, dto.ErrorResponse{Error: "could not create session"})
+            return
+        }
+        ctx.JSON(200, dto.LoginResponse{Message: "logged in"})
+    }
+}
+
+// Protected handler — GET /session/profile (requires "session" scheme)
+func (r *SessionProfileRoute) Handler() route.HandlerFunc {
+    return func(ctx route.Context) {
+        // principal was resolved from the store by the middleware
+        user, _ := security.GetPrincipalAs[*MyUser](ctx.Request())
+        ctx.JSON(200, dto.ProfileResponse{Subject: user.Name})
+    }
+}
+func (r *SessionProfileRoute) RequiredSchemes() []string { return []string{"session"} }
+
+// Logout handler — DELETE /auth/logout
+func (r *LogoutRoute) Handler() route.HandlerFunc {
+    return func(ctx route.Context) {
+        // removes from store, clears Set-Cookie in response
+        scheme.RevokeSession(ctx.Request().Context(), ctx.ResponseWriter(), ctx.Request())
+        ctx.JSON(200, dto.LogoutResponse{Message: "logged out"})
+    }
+}
+```
+
+The scheme produces the following OpenAPI entry:
+
+```yaml
+components:
+  securitySchemes:
+    session:
+      type: apiKey
+      in: cookie
+      name: session_id
+```
+
+| Method | Description |
+|---|---|
+| `NewSessionCookieScheme(name, cookieName, validateFunc)` | Creates a session-cookie scheme (pass `nil` for validateFunc when using a store) |
+| `CookieName()` | Returns the HTTP cookie name |
+| `ParamName()` | Alias for `CookieName()`, used by the OpenAPI generator |
+| `Location()` | Always returns `"cookie"`, satisfies the OpenAPI duck-type |
+| `SetDescription(desc)` | Sets the description for OpenAPI docs |
+| `WithStore(store)` | Attaches a SessionStore; Authenticate will use `store.Get` instead of the validate func |
+| `WithCookieOptions(opts)` | Configures Set-Cookie attributes used by IssueSession |
+| `IssueSession(ctx, w, principal)` | Generates a session ID, stores the principal, writes Set-Cookie |
+| `RevokeSession(ctx, w, r)` | Deletes the session from the store and clears the cookie |
+
+**CookieOptions fields:**
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `MaxAge` | `int` | `0` | Seconds until expiry; 0 = session cookie (deleted on browser close) |
+| `Path` | `string` | `"/"` | Cookie path; defaults to `/` if empty |
+| `Domain` | `string` | `""` | Cookie domain attribute (optional) |
+| `Secure` | `bool` | `false` | Send only over HTTPS — set `true` in production |
+| `HttpOnly` | `bool` | `true` | Prevent JavaScript access (mitigates XSS) |
+| `SameSite` | `http.SameSite` | Lax | Cross-site cookie policy |
+
+**SessionStore interface** — optionally use the `SessionStore` interface to decouple session-store logic:
+
+```go
+type SessionStore interface {
+    Get(ctx context.Context, sessionID string) (principal interface{}, err error)
+    Set(ctx context.Context, sessionID string, principal interface{}) error
+    Delete(ctx context.Context, sessionID string) error
+}
+```
+
+The interface is deliberately left without a built-in implementation so you can wire in Redis, a relational database, or an in-memory map that suits your deployment.
 
 ## Contributing
 

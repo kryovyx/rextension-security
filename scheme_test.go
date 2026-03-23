@@ -1,6 +1,7 @@
 package security_test
 
 import (
+	"context"
 	"encoding/base64"
 	"fmt"
 	"net/http"
@@ -461,7 +462,7 @@ func TestAPIKeyScheme_Authenticate_Query_ValidateError(t *testing.T) {
 }
 
 func TestAPIKeyScheme_Authenticate_UnknownLocation(t *testing.T) {
-	s := security.NewAPIKeyScheme("k", "key", security.APIKeyLocation("cookie"), func(key string) (interface{}, error) { return key, nil })
+	s := security.NewAPIKeyScheme("k", "key", security.APIKeyLocation("grpc"), func(key string) (interface{}, error) { return key, nil })
 	r := httptest.NewRequest(http.MethodGet, "/", nil)
 
 	_, err := s.Authenticate(r)
@@ -469,6 +470,459 @@ func TestAPIKeyScheme_Authenticate_UnknownLocation(t *testing.T) {
 		t.Fatal("expected error for unknown location")
 	}
 	if !strings.Contains(err.Error(), "unknown API key location") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestAPIKeyScheme_Authenticate_Cookie_MissingCookie(t *testing.T) {
+	s := security.NewAPIKeyScheme("k", "session_id", security.APIKeyCookie, func(key string) (interface{}, error) { return key, nil })
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
+
+	_, err := s.Authenticate(r)
+	if err == nil {
+		t.Fatal("expected error for missing cookie")
+	}
+	if !strings.Contains(err.Error(), "missing cookie") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestAPIKeyScheme_Authenticate_Cookie_ValidKey(t *testing.T) {
+	s := security.NewAPIKeyScheme("k", "session_id", security.APIKeyCookie, func(key string) (interface{}, error) {
+		return "session:" + key, nil
+	})
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
+	r.AddCookie(&http.Cookie{Name: "session_id", Value: "abc123"})
+
+	principal, err := s.Authenticate(r)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if principal != "session:abc123" {
+		t.Fatalf("expected 'session:abc123', got %v", principal)
+	}
+}
+
+func TestAPIKeyScheme_Authenticate_Cookie_ValidateError(t *testing.T) {
+	s := security.NewAPIKeyScheme("k", "session_id", security.APIKeyCookie, func(key string) (interface{}, error) {
+		return nil, fmt.Errorf("session expired")
+	})
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
+	r.AddCookie(&http.Cookie{Name: "session_id", Value: "old-session"})
+
+	_, err := s.Authenticate(r)
+	if err == nil {
+		t.Fatal("expected error from validate function")
+	}
+	if !strings.Contains(err.Error(), "session expired") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// SessionCookieScheme
+// ---------------------------------------------------------------------------
+
+func TestNewSessionCookieScheme_DefaultName(t *testing.T) {
+	s := security.NewSessionCookieScheme("", "", func(id string) (interface{}, error) { return nil, nil })
+	if s.Name() != "sessionCookie" {
+		t.Fatalf("expected default name 'sessionCookie', got %q", s.Name())
+	}
+}
+
+func TestNewSessionCookieScheme_DefaultCookieName(t *testing.T) {
+	s := security.NewSessionCookieScheme("", "", func(id string) (interface{}, error) { return nil, nil })
+	if s.CookieName() != "session_id" {
+		t.Fatalf("expected default cookie name 'session_id', got %q", s.CookieName())
+	}
+}
+
+func TestNewSessionCookieScheme_CustomFields(t *testing.T) {
+	s := security.NewSessionCookieScheme("bff", "sid", func(id string) (interface{}, error) { return nil, nil })
+	if s.Name() != "bff" {
+		t.Fatalf("expected name 'bff', got %q", s.Name())
+	}
+	if s.CookieName() != "sid" {
+		t.Fatalf("expected cookie name 'sid', got %q", s.CookieName())
+	}
+}
+
+func TestSessionCookieScheme_Type(t *testing.T) {
+	s := security.NewSessionCookieScheme("s", "sid", func(id string) (interface{}, error) { return nil, nil })
+	if s.Type() != "apiKey" {
+		t.Fatalf("expected type 'apiKey', got %q", s.Type())
+	}
+}
+
+func TestSessionCookieScheme_Location(t *testing.T) {
+	s := security.NewSessionCookieScheme("s", "sid", func(id string) (interface{}, error) { return nil, nil })
+	if s.Location() != "cookie" {
+		t.Fatalf("expected location 'cookie', got %q", s.Location())
+	}
+}
+
+func TestSessionCookieScheme_ParamName(t *testing.T) {
+	s := security.NewSessionCookieScheme("s", "my_session", func(id string) (interface{}, error) { return nil, nil })
+	if s.ParamName() != "my_session" {
+		t.Fatalf("expected param name 'my_session', got %q", s.ParamName())
+	}
+}
+
+func TestSessionCookieScheme_Challenge_Empty(t *testing.T) {
+	s := security.NewSessionCookieScheme("s", "sid", func(id string) (interface{}, error) { return nil, nil })
+	if s.Challenge() != "" {
+		t.Fatalf("expected empty challenge, got %q", s.Challenge())
+	}
+}
+
+func TestSessionCookieScheme_SetDescription(t *testing.T) {
+	s := security.NewSessionCookieScheme("s", "sid", func(id string) (interface{}, error) { return nil, nil })
+	ret := s.SetDescription("BFF session")
+	if ret != s {
+		t.Fatal("SetDescription should return the same pointer for chaining")
+	}
+	if s.Description() != "BFF session" {
+		t.Fatalf("expected 'BFF session', got %q", s.Description())
+	}
+}
+
+func TestSessionCookieScheme_Authenticate_MissingCookie(t *testing.T) {
+	s := security.NewSessionCookieScheme("s", "sid", func(id string) (interface{}, error) { return id, nil })
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
+
+	_, err := s.Authenticate(r)
+	if err == nil {
+		t.Fatal("expected error for missing session cookie")
+	}
+	if !strings.Contains(err.Error(), "missing session cookie") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestSessionCookieScheme_Authenticate_EmptyCookieValue(t *testing.T) {
+	s := security.NewSessionCookieScheme("s", "sid", func(id string) (interface{}, error) { return id, nil })
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
+	r.AddCookie(&http.Cookie{Name: "sid", Value: ""})
+
+	_, err := s.Authenticate(r)
+	if err == nil {
+		t.Fatal("expected error for empty session cookie value")
+	}
+	if !strings.Contains(err.Error(), "empty session cookie") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestSessionCookieScheme_Authenticate_ValidSession(t *testing.T) {
+	s := security.NewSessionCookieScheme("s", "sid", func(id string) (interface{}, error) {
+		return map[string]string{"user": id}, nil
+	})
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
+	r.AddCookie(&http.Cookie{Name: "sid", Value: "session-xyz"})
+
+	principal, err := s.Authenticate(r)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	m, ok := principal.(map[string]string)
+	if !ok {
+		t.Fatalf("expected map principal, got %T", principal)
+	}
+	if m["user"] != "session-xyz" {
+		t.Fatalf("expected user 'session-xyz', got %q", m["user"])
+	}
+}
+
+func TestSessionCookieScheme_Authenticate_ValidateError(t *testing.T) {
+	s := security.NewSessionCookieScheme("s", "sid", func(id string) (interface{}, error) {
+		return nil, fmt.Errorf("session not found")
+	})
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
+	r.AddCookie(&http.Cookie{Name: "sid", Value: "expired-session"})
+
+	_, err := s.Authenticate(r)
+	if err == nil {
+		t.Fatal("expected error from validate function")
+	}
+	if !strings.Contains(err.Error(), "session not found") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// SessionCookieScheme — store-backed lifecycle (WithStore, IssueSession, RevokeSession)
+// ---------------------------------------------------------------------------
+
+// mockSessionStore is an in-memory SessionStore for testing.
+type mockSessionStore struct {
+	data   map[string]interface{}
+	getErr error
+	setErr error
+	delErr error
+}
+
+func newMockStore() *mockSessionStore {
+	return &mockSessionStore{data: make(map[string]interface{})}
+}
+
+func (m *mockSessionStore) Get(_ context.Context, id string) (interface{}, error) {
+	if m.getErr != nil {
+		return nil, m.getErr
+	}
+	v, ok := m.data[id]
+	if !ok {
+		return nil, fmt.Errorf("session not found")
+	}
+	return v, nil
+}
+
+func (m *mockSessionStore) Set(_ context.Context, id string, p interface{}) error {
+	if m.setErr != nil {
+		return m.setErr
+	}
+	m.data[id] = p
+	return nil
+}
+
+func (m *mockSessionStore) Delete(_ context.Context, id string) error {
+	if m.delErr != nil {
+		return m.delErr
+	}
+	delete(m.data, id)
+	return nil
+}
+
+func TestSessionCookieScheme_WithStore_Authenticate_UsesStore(t *testing.T) {
+	store := newMockStore()
+	store.data["known-session"] = map[string]string{"user": "alice"}
+
+	s := security.NewSessionCookieScheme("s", "sid", nil).WithStore(store)
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
+	r.AddCookie(&http.Cookie{Name: "sid", Value: "known-session"})
+
+	principal, err := s.Authenticate(r)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	m, _ := principal.(map[string]string)
+	if m["user"] != "alice" {
+		t.Fatalf("expected user 'alice', got %v", m["user"])
+	}
+}
+
+func TestSessionCookieScheme_WithStore_Authenticate_StoreError(t *testing.T) {
+	store := newMockStore()
+	store.getErr = fmt.Errorf("session expired")
+
+	s := security.NewSessionCookieScheme("s", "sid", nil).WithStore(store)
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
+	r.AddCookie(&http.Cookie{Name: "sid", Value: "old-session"})
+
+	_, err := s.Authenticate(r)
+	if err == nil {
+		t.Fatal("expected error from store")
+	}
+	if !strings.Contains(err.Error(), "session expired") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestSessionCookieScheme_Authenticate_NoStoreNoValidate(t *testing.T) {
+	s := security.NewSessionCookieScheme("s", "sid", nil)
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
+	r.AddCookie(&http.Cookie{Name: "sid", Value: "some-id"})
+
+	_, err := s.Authenticate(r)
+	if err == nil {
+		t.Fatal("expected error when no store or validate func configured")
+	}
+	if !strings.Contains(err.Error(), "no store or validate func") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestSessionCookieScheme_IssueSession_WritesSetCookieAndStoresSession(t *testing.T) {
+	store := newMockStore()
+	s := security.NewSessionCookieScheme("s", "sid", nil).WithStore(store)
+
+	w := httptest.NewRecorder()
+	principal := map[string]string{"user": "bob"}
+
+	sessionID, err := s.IssueSession(context.Background(), w, principal)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if sessionID == "" {
+		t.Fatal("expected non-empty session ID")
+	}
+	// Cookie must be present in the response.
+	resp := w.Result()
+	cookies := resp.Cookies()
+	var found *http.Cookie
+	for _, c := range cookies {
+		if c.Name == "sid" {
+			found = c
+			break
+		}
+	}
+	if found == nil {
+		t.Fatal("expected Set-Cookie header for 'sid'")
+	}
+	if found.Value != sessionID {
+		t.Fatalf("cookie value %q != session ID %q", found.Value, sessionID)
+	}
+	// Principal must be stored in the store.
+	stored, err := store.Get(context.Background(), sessionID)
+	if err != nil {
+		t.Fatalf("expected principal in store: %v", err)
+	}
+	m, _ := stored.(map[string]string)
+	if m["user"] != "bob" {
+		t.Fatalf("stored user should be 'bob', got %v", m)
+	}
+}
+
+func TestSessionCookieScheme_IssueSession_NoStore_Error(t *testing.T) {
+	s := security.NewSessionCookieScheme("s", "sid", nil)
+	w := httptest.NewRecorder()
+
+	_, err := s.IssueSession(context.Background(), w, map[string]string{})
+	if err == nil {
+		t.Fatal("expected error when no store attached")
+	}
+	if !strings.Contains(err.Error(), "no SessionStore attached") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestSessionCookieScheme_IssueSession_StoreSetError(t *testing.T) {
+	store := newMockStore()
+	store.setErr = fmt.Errorf("db unavailable")
+	s := security.NewSessionCookieScheme("s", "sid", nil).WithStore(store)
+
+	w := httptest.NewRecorder()
+	_, err := s.IssueSession(context.Background(), w, "principal")
+	if err == nil {
+		t.Fatal("expected error propagated from store.Set")
+	}
+	if !strings.Contains(err.Error(), "db unavailable") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestSessionCookieScheme_IssueSession_SessionID_IsUnique(t *testing.T) {
+	store := newMockStore()
+	s := security.NewSessionCookieScheme("s", "sid", nil).WithStore(store)
+	w1, w2 := httptest.NewRecorder(), httptest.NewRecorder()
+
+	id1, _ := s.IssueSession(context.Background(), w1, "p1")
+	id2, _ := s.IssueSession(context.Background(), w2, "p2")
+	if id1 == id2 {
+		t.Fatal("expected unique session IDs")
+	}
+}
+
+func TestSessionCookieScheme_IssueSession_WithCookieOptions(t *testing.T) {
+	store := newMockStore()
+	s := security.NewSessionCookieScheme("s", "sid", nil).
+		WithStore(store).
+		WithCookieOptions(security.CookieOptions{
+			MaxAge:   3600,
+			Path:     "/api",
+			Secure:   true,
+			HttpOnly: true,
+			SameSite: http.SameSiteStrictMode,
+		})
+
+	w := httptest.NewRecorder()
+	_, err := s.IssueSession(context.Background(), w, "principal")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var found *http.Cookie
+	for _, c := range w.Result().Cookies() {
+		if c.Name == "sid" {
+			found = c
+			break
+		}
+	}
+	if found == nil {
+		t.Fatal("expected Set-Cookie for 'sid'")
+	}
+	if found.MaxAge != 3600 {
+		t.Errorf("expected MaxAge 3600, got %d", found.MaxAge)
+	}
+	if found.Path != "/api" {
+		t.Errorf("expected Path '/api', got %q", found.Path)
+	}
+	if !found.Secure {
+		t.Error("expected Secure to be true")
+	}
+	if !found.HttpOnly {
+		t.Error("expected HttpOnly to be true")
+	}
+}
+
+func TestSessionCookieScheme_RevokeSession_ClearsSessionAndCookie(t *testing.T) {
+	store := newMockStore()
+	store.data["live-session"] = map[string]string{"user": "carol"}
+	s := security.NewSessionCookieScheme("s", "sid", nil).WithStore(store)
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodDelete, "/", nil)
+	r.AddCookie(&http.Cookie{Name: "sid", Value: "live-session"})
+
+	if err := s.RevokeSession(context.Background(), w, r); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// Session must be gone from the store.
+	_, err := store.Get(context.Background(), "live-session")
+	if err == nil {
+		t.Fatal("expected session to be deleted from store")
+	}
+	// Response must contain a clearing Set-Cookie.
+	var found *http.Cookie
+	for _, c := range w.Result().Cookies() {
+		if c.Name == "sid" {
+			found = c
+			break
+		}
+	}
+	if found == nil {
+		t.Fatal("expected clearing Set-Cookie header")
+	}
+	if found.MaxAge != -1 {
+		t.Errorf("expected MaxAge -1 for cookie clear, got %d", found.MaxAge)
+	}
+}
+
+func TestSessionCookieScheme_RevokeSession_NoCookieIsNoOp(t *testing.T) {
+	store := newMockStore()
+	s := security.NewSessionCookieScheme("s", "sid", nil).WithStore(store)
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodDelete, "/", nil) // no cookie
+
+	if err := s.RevokeSession(context.Background(), w, r); err != nil {
+		t.Fatalf("unexpected error on no-op revoke: %v", err)
+	}
+}
+
+func TestSessionCookieScheme_RevokeSession_StoreDeleteError(t *testing.T) {
+	store := newMockStore()
+	store.data["some-session"] = "principal"
+	store.delErr = fmt.Errorf("db write failed")
+	s := security.NewSessionCookieScheme("s", "sid", nil).WithStore(store)
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodDelete, "/", nil)
+	r.AddCookie(&http.Cookie{Name: "sid", Value: "some-session"})
+
+	err := s.RevokeSession(context.Background(), w, r)
+	if err == nil {
+		t.Fatal("expected error from store.Delete")
+	}
+	if !strings.Contains(err.Error(), "db write failed") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
