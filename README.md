@@ -3,7 +3,7 @@
 A pluggable authentication and authorization extension for the Rex framework.
 
 [![Go Version](https://img.shields.io/badge/go-1.26+-blue.svg)](https://golang.org/dl/)
-[![Coverage](https://img.shields.io/badge/coverage-83.2%25-green.svg)](#)
+[![Coverage](https://img.shields.io/badge/coverage-84.5%25-green.svg)](#)
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 ## Overview
@@ -11,7 +11,7 @@ A pluggable authentication and authorization extension for the Rex framework.
 `rextension-security` is a Rex extension that provides:
 
 - **Pluggable SecurityScheme interface** for custom authentication strategies
-- **Built-in schemes**: Bearer token, HTTP Basic, API key, and session cookie authentication
+- **Built-in schemes**: Bearer token, HTTP Basic, API key, session cookie, and WebAuthn/FIDO2 authentication
 - **Per-route security requirements** via the `SecuredRoute` interface
 - **Auto-registered middleware** that gates requests to secured routes
 - **WWW-Authenticate challenge headers** on 401 responses
@@ -383,6 +383,71 @@ type SessionStore interface {
 ```
 
 The interface is deliberately left without a built-in implementation so you can wire in Redis, a relational database, or an in-memory map that suits your deployment.
+
+### WebAuthn / FIDO2 (Passkeys)
+
+`WebAuthnScheme` implements `SecurityScheme` for the WebAuthn authentication ceremony. Credential storage and challenge state management are fully decoupled: you supply a `WebAuthnAuthenticator` (and optionally a `WebAuthnRegistrar`), and the scheme delegates all cryptographic work to them — consistent with how `BearerScheme` delegates to a `BearerValidateFunc`.
+
+#### Interfaces
+
+```go
+// WebAuthnRegistrar handles the registration ceremony (§7.1).
+type WebAuthnRegistrar interface {
+    BeginRegistration(ctx context.Context, userID []byte, userName string) (*PublicKeyCredentialCreationOptions, error)
+    FinishRegistration(ctx context.Context, userID []byte, credentialID, clientDataJSON, attestationObject []byte) error
+}
+
+// WebAuthnAuthenticator handles the authentication ceremony (§7.2).
+type WebAuthnAuthenticator interface {
+    BeginAuthentication(ctx context.Context, userID []byte) (*PublicKeyCredentialRequestOptions, error)
+    FinishAuthentication(ctx context.Context, resp *AuthenticatorAssertionResponse) (principal interface{}, err error)
+}
+```
+
+`FinishAuthentication` must validate the challenge, verify the assertion signature against the stored public key, and check/update the sign counter to prevent replay attacks.
+
+#### Usage
+
+```go
+// Supply your own implementations of WebAuthnRegistrar and WebAuthnAuthenticator.
+scheme := security.NewWebAuthnScheme("webauthn", myRegistrar, myAuthenticator)
+
+// Registration endpoints — call from your own HTTP handlers:
+opts, err := scheme.Registrar().BeginRegistration(ctx, userID, userName)
+// … send opts as JSON to the browser …
+err = scheme.Registrar().FinishRegistration(ctx, userID, credentialID, clientDataJSON, attestationObject)
+
+// Authentication — place the parsed assertion in the context before the
+// middleware runs (or before a manual Authenticate call):
+ctx := security.WithAssertionResponse(r.Context(), &security.AuthenticatorAssertionResponse{
+    CredentialID:      credentialID,
+    ClientDataJSON:    clientDataJSON,
+    AuthenticatorData: authenticatorData,
+    Signature:         signature,
+    UserHandle:        userHandle, // optional (passkey / discoverable credential)
+})
+principal, err := scheme.Authenticate(r.WithContext(ctx))
+```
+
+#### COSE algorithm constants
+
+| Constant | COSE value | Algorithm |
+|---|---|---|
+| `AlgES256` | -7 | ECDSA w/ SHA-256 |
+| `AlgES384` | -35 | ECDSA w/ SHA-384 |
+| `AlgES512` | -36 | ECDSA w/ SHA-512 |
+| `AlgRS256` | -257 | RSASSA-PKCS1-v1_5 w/ SHA-256 |
+| `AlgEdDSA` | -8 | EdDSA |
+
+#### Constructor & method reference
+
+| Method | Description |
+|---|---|
+| `NewWebAuthnScheme(name, registrar, authenticator)` | Creates the scheme; `authenticator` must not be nil |
+| `Registrar()` | Returns the `WebAuthnRegistrar` for use in registration handlers |
+| `Authenticator()` | Returns the `WebAuthnAuthenticator` |
+| `SetDescription(desc)` | Sets the description for OpenAPI docs |
+| `WithAssertionResponse(ctx, resp)` | Helper to inject the parsed assertion into a context |
 
 ## Contributing
 
