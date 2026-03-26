@@ -18,9 +18,9 @@ func TestNewDefaultConfig(t *testing.T) {
 }
 
 func TestWithScheme(t *testing.T) {
-	scheme := security.NewBearerScheme("test", func(token string) (interface{}, error) {
+	scheme := security.NewBearerScheme("test", security.BearerValidateFunc(func(token string) (interface{}, error) {
 		return nil, nil
-	})
+	}))
 
 	opt := security.WithScheme(scheme)
 	cfg := security.NewDefaultConfig()
@@ -35,9 +35,9 @@ func TestWithScheme(t *testing.T) {
 }
 
 func TestWithScheme_Multiple(t *testing.T) {
-	s1 := security.NewBearerScheme("bearer", func(token string) (interface{}, error) {
+	s1 := security.NewBearerScheme("bearer", security.BearerValidateFunc(func(token string) (interface{}, error) {
 		return nil, nil
-	})
+	}))
 	s2 := security.NewBasicScheme("basic", "realm", func(u, p string) (interface{}, error) {
 		return nil, nil
 	})
@@ -62,9 +62,9 @@ func TestNewConfig_NoOptions(t *testing.T) {
 }
 
 func TestNewConfig_WithOptions(t *testing.T) {
-	scheme := security.NewBearerScheme("jwt", func(token string) (interface{}, error) {
+	scheme := security.NewBearerScheme("jwt", security.BearerValidateFunc(func(token string) (interface{}, error) {
 		return nil, nil
-	})
+	}))
 
 	cfg := security.NewConfig(security.WithScheme(scheme))
 	if len(cfg.Schemes) != 1 {
@@ -76,12 +76,12 @@ func TestNewConfig_WithOptions(t *testing.T) {
 }
 
 func TestNewConfig_MultipleOptions(t *testing.T) {
-	s1 := security.NewBearerScheme("bearer", func(token string) (interface{}, error) {
+	s1 := security.NewBearerScheme("bearer", security.BearerValidateFunc(func(token string) (interface{}, error) {
 		return nil, nil
-	})
-	s2 := security.NewAPIKeyScheme("apikey", "X-API-Key", security.APIKeyHeader, func(key string) (interface{}, error) {
+	}))
+	s2 := security.NewAPIKeyScheme("apikey", "X-API-Key", security.APIKeyHeader, security.APIKeyValidateFunc(func(key string) (interface{}, error) {
 		return nil, nil
-	})
+	}))
 
 	cfg := security.NewConfig(security.WithScheme(s1), security.WithScheme(s2))
 	if len(cfg.Schemes) != 2 {
@@ -93,9 +93,9 @@ func TestNewConfig_MultipleOptions(t *testing.T) {
 func TestConfig_SchemesField(t *testing.T) {
 	cfg := &security.Config{
 		Schemes: []security.SecurityScheme{
-			security.NewBearerScheme("b", func(token string) (interface{}, error) { return nil, nil }),
+			security.NewBearerScheme("b", security.BearerValidateFunc(func(token string) (interface{}, error) { return nil, nil })),
 			security.NewBasicScheme("a", "", func(u, p string) (interface{}, error) { return nil, nil }),
-			security.NewAPIKeyScheme("k", "key", security.APIKeyQuery, func(k string) (interface{}, error) { return nil, nil }),
+			security.NewAPIKeyScheme("k", "key", security.APIKeyQuery, security.APIKeyValidateFunc(func(k string) (interface{}, error) { return nil, nil })),
 		},
 	}
 	if len(cfg.Schemes) != 3 {

@@ -38,20 +38,18 @@ type SecurityScheme interface {
 
 // --- Bearer Token Scheme ---
 
-// BearerValidateFunc is the callback signature for Bearer token validation.
-// It receives the raw token string and returns a principal or error.
-type BearerValidateFunc func(token string) (principal interface{}, err error)
-
 // BearerScheme authenticates via the Authorization: Bearer <token> header.
 type BearerScheme struct {
 	name         string
 	description  string
 	bearerFormat string
-	validate     BearerValidateFunc
+	validate     TokenValidator
 }
 
 // NewBearerScheme creates a Bearer authentication scheme.
-func NewBearerScheme(name string, validate BearerValidateFunc) *BearerScheme {
+// validate must implement TokenValidator; use BearerValidateFunc to wrap a
+// plain function: security.BearerValidateFunc(myFunc).
+func NewBearerScheme(name string, validate TokenValidator) *BearerScheme {
 	if name == "" {
 		name = "bearer"
 	}
@@ -95,7 +93,7 @@ func (s *BearerScheme) Authenticate(r *http.Request) (interface{}, error) {
 	if token == "" {
 		return nil, fmt.Errorf("empty bearer token")
 	}
-	return s.validate(token)
+	return s.validate.ValidateToken(token)
 }
 
 func (s *BearerScheme) Challenge() string {
@@ -103,9 +101,6 @@ func (s *BearerScheme) Challenge() string {
 }
 
 // --- Basic Auth Scheme ---
-
-// BasicValidateFunc is the callback signature for Basic auth validation.
-type BasicValidateFunc func(username, password string) (principal interface{}, err error)
 
 // BasicScheme authenticates via the Authorization: Basic <base64> header.
 type BasicScheme struct {
@@ -170,20 +165,19 @@ const (
 	APIKeyCookie APIKeyLocation = "cookie"
 )
 
-// APIKeyValidateFunc is the callback signature for API key validation.
-type APIKeyValidateFunc func(key string) (principal interface{}, err error)
-
 // APIKeyScheme authenticates via a named header or query parameter.
 type APIKeyScheme struct {
 	name      string
 	paramName string
 	location  APIKeyLocation
-	validate  APIKeyValidateFunc
+	validate  KeyValidator
 }
 
 // NewAPIKeyScheme creates an API key authentication scheme.
 // paramName is the header or query parameter name (e.g., "X-API-Key").
-func NewAPIKeyScheme(name, paramName string, location APIKeyLocation, validate APIKeyValidateFunc) *APIKeyScheme {
+// validate must implement KeyValidator; use APIKeyValidateFunc to wrap a plain
+// function: security.APIKeyValidateFunc(myFunc).
+func NewAPIKeyScheme(name, paramName string, location APIKeyLocation, validate KeyValidator) *APIKeyScheme {
 	if name == "" {
 		name = "apikey"
 	}
@@ -226,7 +220,7 @@ func (s *APIKeyScheme) Authenticate(r *http.Request) (interface{}, error) {
 	if key == "" {
 		return nil, fmt.Errorf("missing API key in %s %q", s.location, s.paramName)
 	}
-	return s.validate(key)
+	return s.validate.ValidateKey(key)
 }
 
 func (s *APIKeyScheme) Challenge() string {
@@ -234,17 +228,6 @@ func (s *APIKeyScheme) Challenge() string {
 }
 
 // --- Session Cookie Scheme ---
-
-// SessionValidateFunc is the callback signature for session cookie validation.
-// It receives the raw session ID extracted from the cookie and must return
-// the principal (e.g. a user object, claims map) that represents the
-// authenticated session, or an error if the session is unknown or expired.
-//
-// The function is responsible for any OAuth token exchange, cache lookup, or
-// database query needed to resolve the session ID to a principal.
-// It is optional when a SessionStore is attached via WithStore — in that case
-// the store's Get method is used instead.
-type SessionValidateFunc func(sessionID string) (principal interface{}, err error)
 
 // CookieOptions controls the attributes of the Set-Cookie header written by
 // IssueSession. Use WithCookieOptions to configure these on a scheme.
@@ -286,7 +269,7 @@ type SessionCookieScheme struct {
 	name          string
 	cookieName    string
 	description   string
-	validate      SessionValidateFunc
+	validate      SessionValidator
 	store         SessionStore
 	cookieOptions CookieOptions
 }
@@ -294,9 +277,12 @@ type SessionCookieScheme struct {
 // NewSessionCookieScheme creates a session-cookie authentication scheme.
 // name is the unique scheme identifier registered with the security extension.
 // cookieName is the HTTP cookie name that carries the session ID (e.g. "session_id").
-// validate is called with the raw cookie value on every authenticated request
-// when no SessionStore is attached. Pass nil when you intend to call WithStore.
-func NewSessionCookieScheme(name, cookieName string, validate SessionValidateFunc) *SessionCookieScheme {
+// validate is the SessionValidator used to authenticate requests when no
+// SessionStore is attached via WithStore. Pass nil when using WithStore only.
+// Use SessionValidateFunc to wrap a plain function:
+//
+//	security.SessionValidateFunc(func(id string) (interface{}, error) { ... })
+func NewSessionCookieScheme(name, cookieName string, validate SessionValidator) *SessionCookieScheme {
 	if name == "" {
 		name = "sessionCookie"
 	}
@@ -352,25 +338,38 @@ func (s *SessionCookieScheme) WithCookieOptions(opts CookieOptions) *SessionCook
 	return s
 }
 
-// IssueSession generates a cryptographically random session ID, persists the
-// principal in the attached SessionStore, and writes a Set-Cookie header on w.
-// It returns the new session ID so the caller can use it for further work
-// (e.g. storing it in an audit log).
+// IssueSession creates a new session for principal and writes a Set-Cookie
+// header on w. It returns the session ID.
 //
-// IssueSession requires a SessionStore to be attached via WithStore.
+// When a SessionStore is attached via WithStore, IssueSession generates a
+// cryptographically random 64-hex-character session ID and persists the
+// principal in the store.
+//
+// When a SessionValidator is passed to NewSessionCookieScheme, IssueSession
+// delegates ID generation and storage to validator.IssueSession.
+//
+// At least one of a SessionStore or a SessionValidator must be configured.
 func (s *SessionCookieScheme) IssueSession(ctx context.Context, w http.ResponseWriter, principal interface{}) (string, error) {
-	if s.store == nil {
+	var sessionID string
+	if s.store != nil {
+		// Store-based path: scheme generates the session ID.
+		b := make([]byte, 32)
+		if _, err := rand.Read(b); err != nil {
+			return "", fmt.Errorf("SessionCookieScheme: failed to generate session ID: %w", err)
+		}
+		sessionID = hex.EncodeToString(b)
+		if err := s.store.Set(ctx, sessionID, principal); err != nil {
+			return "", fmt.Errorf("SessionCookieScheme: failed to store session: %w", err)
+		}
+	} else if s.validate != nil {
+		// Validator-based path: delegate ID generation + storage to validator.
+		var err error
+		sessionID, err = s.validate.IssueSession(ctx, principal)
+		if err != nil {
+			return "", fmt.Errorf("SessionCookieScheme: validator failed to issue session: %w", err)
+		}
+	} else {
 		return "", fmt.Errorf("SessionCookieScheme: no SessionStore attached — call WithStore first")
-	}
-	// Generate 32 cryptographically random bytes → 64-character hex session ID.
-	b := make([]byte, 32)
-	if _, err := rand.Read(b); err != nil {
-		return "", fmt.Errorf("SessionCookieScheme: failed to generate session ID: %w", err)
-	}
-	sessionID := hex.EncodeToString(b)
-
-	if err := s.store.Set(ctx, sessionID, principal); err != nil {
-		return "", fmt.Errorf("SessionCookieScheme: failed to store session: %w", err)
 	}
 
 	opts := s.cookieOptions
@@ -405,9 +404,15 @@ func (s *SessionCookieScheme) RevokeSession(ctx context.Context, w http.Response
 		// Cookie not present — nothing to revoke.
 		return nil
 	}
-	if s.store != nil && c.Value != "" {
-		if err := s.store.Delete(ctx, c.Value); err != nil {
-			return fmt.Errorf("SessionCookieScheme: failed to delete session: %w", err)
+	if c.Value != "" {
+		if s.store != nil {
+			if err := s.store.Delete(ctx, c.Value); err != nil {
+				return fmt.Errorf("SessionCookieScheme: failed to delete session: %w", err)
+			}
+		} else if s.validate != nil {
+			if err := s.validate.RevokeSession(ctx, c.Value); err != nil {
+				return fmt.Errorf("SessionCookieScheme: validator failed to revoke session: %w", err)
+			}
 		}
 	}
 	// Expire the cookie in the browser.
@@ -435,11 +440,11 @@ func (s *SessionCookieScheme) Authenticate(r *http.Request) (interface{}, error)
 	if s.store != nil {
 		return s.store.Get(r.Context(), sessionID)
 	}
-	// Fall back to a user-supplied validate func (stateless validation).
+	// Fall back to the SessionValidator.
 	if s.validate == nil {
 		return nil, fmt.Errorf("SessionCookieScheme: no store or validate func configured")
 	}
-	return s.validate(sessionID)
+	return s.validate.ValidateSession(r.Context(), sessionID)
 }
 
 // Challenge intentionally returns an empty string.
