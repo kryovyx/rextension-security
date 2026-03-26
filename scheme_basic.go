@@ -10,6 +10,9 @@ import (
 	"strings"
 )
 
+// BasicValidateFunc is the callback signature for Basic auth credential validation.
+type BasicValidateFunc func(username, password string) (principal interface{}, err error)
+
 // BasicScheme authenticates via the Authorization: Basic <base64> header.
 type BasicScheme struct {
 	name     string

@@ -18,8 +18,7 @@ type BearerScheme struct {
 }
 
 // NewBearerScheme creates a Bearer authentication scheme.
-// validate must implement TokenValidator; use BearerValidateFunc to wrap a
-// plain function: security.BearerValidateFunc(myFunc).
+// validate must implement TokenValidator.
 func NewBearerScheme(name string, validate TokenValidator) *BearerScheme {
 	if name == "" {
 		name = "bearer"

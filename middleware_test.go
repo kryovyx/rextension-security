@@ -127,7 +127,7 @@ func TestSecurityMiddleware_EmptyRequiredSchemes(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestSecurityMiddleware_AuthSuccess(t *testing.T) {
-	scheme := security.NewBearerScheme("bearer", security.BearerValidateFunc(func(token string) (interface{}, error) {
+	scheme := security.NewBearerScheme("bearer", tokenValidatorFunc(func(token string) (interface{}, error) {
 		return "user:" + token, nil
 	}))
 	secRoute := &mockSecuredRoute{method: "GET", path: "/protected", schemes: []string{"bearer"}}
@@ -166,7 +166,7 @@ func TestSecurityMiddleware_AuthSuccess(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestSecurityMiddleware_AuthFailure(t *testing.T) {
-	scheme := security.NewBearerScheme("bearer", security.BearerValidateFunc(func(token string) (interface{}, error) {
+	scheme := security.NewBearerScheme("bearer", tokenValidatorFunc(func(token string) (interface{}, error) {
 		return nil, fmt.Errorf("invalid token")
 	}))
 	secRoute := &mockSecuredRoute{method: "POST", path: "/secret", schemes: []string{"bearer"}}
@@ -200,7 +200,7 @@ func TestSecurityMiddleware_AuthFailure(t *testing.T) {
 }
 
 func TestSecurityMiddleware_AuthFailure_MissingHeader(t *testing.T) {
-	scheme := security.NewBearerScheme("bearer", security.BearerValidateFunc(func(token string) (interface{}, error) {
+	scheme := security.NewBearerScheme("bearer", tokenValidatorFunc(func(token string) (interface{}, error) {
 		return "ok", nil
 	}))
 	secRoute := &mockSecuredRoute{method: "GET", path: "/guarded", schemes: []string{"bearer"}}
@@ -261,10 +261,10 @@ func TestSecurityMiddleware_UnknownScheme(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestSecurityMiddleware_MultipleSchemes_AllSucceed(t *testing.T) {
-	bearerScheme := security.NewBearerScheme("bearer", security.BearerValidateFunc(func(token string) (interface{}, error) {
+	bearerScheme := security.NewBearerScheme("bearer", tokenValidatorFunc(func(token string) (interface{}, error) {
 		return "bearer-user", nil
 	}))
-	apiKeyScheme := security.NewAPIKeyScheme("apikey", "X-API-Key", security.APIKeyHeader, security.APIKeyValidateFunc(func(key string) (interface{}, error) {
+	apiKeyScheme := security.NewAPIKeyScheme("apikey", "X-API-Key", security.APIKeyHeader, keyValidatorFunc(func(key string) (interface{}, error) {
 		return "apikey-user", nil
 	}))
 
@@ -310,10 +310,10 @@ func TestSecurityMiddleware_MultipleSchemes_AllSucceed(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestSecurityMiddleware_MultipleSchemes_SecondFails(t *testing.T) {
-	bearerScheme := security.NewBearerScheme("bearer", security.BearerValidateFunc(func(token string) (interface{}, error) {
+	bearerScheme := security.NewBearerScheme("bearer", tokenValidatorFunc(func(token string) (interface{}, error) {
 		return "bearer-user", nil
 	}))
-	apiKeyScheme := security.NewAPIKeyScheme("apikey", "X-API-Key", security.APIKeyHeader, security.APIKeyValidateFunc(func(key string) (interface{}, error) {
+	apiKeyScheme := security.NewAPIKeyScheme("apikey", "X-API-Key", security.APIKeyHeader, keyValidatorFunc(func(key string) (interface{}, error) {
 		return nil, fmt.Errorf("bad key")
 	}))
 
@@ -349,7 +349,7 @@ func TestSecurityMiddleware_MultipleSchemes_SecondFails(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestSecurityMiddleware_DifferentMethods(t *testing.T) {
-	scheme := security.NewBearerScheme("bearer", security.BearerValidateFunc(func(token string) (interface{}, error) {
+	scheme := security.NewBearerScheme("bearer", tokenValidatorFunc(func(token string) (interface{}, error) {
 		return "authed", nil
 	}))
 	getRoute := &mockSecuredRoute{method: "GET", path: "/resource", schemes: []string{"bearer"}}

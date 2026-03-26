@@ -13,39 +13,63 @@ import (
 )
 
 // ---------------------------------------------------------------------------
+// Local validator helpers (satisfy TokenValidator / KeyValidator interfaces)
+// ---------------------------------------------------------------------------
+
+type tokenValidatorFunc func(token string) (interface{}, error)
+
+func (f tokenValidatorFunc) ValidateToken(token string) (interface{}, error) { return f(token) }
+
+type keyValidatorFunc func(key string) (interface{}, error)
+
+func (f keyValidatorFunc) ValidateKey(key string) (interface{}, error) { return f(key) }
+
+type sessionValidatorFunc func(id string) (interface{}, error)
+
+func (f sessionValidatorFunc) ValidateSession(_ context.Context, id string) (interface{}, error) {
+	return f(id)
+}
+func (f sessionValidatorFunc) IssueSession(_ context.Context, _ interface{}) (string, error) {
+	return "", fmt.Errorf("sessionValidatorFunc: IssueSession not supported")
+}
+func (f sessionValidatorFunc) RevokeSession(_ context.Context, _ string) error {
+	return fmt.Errorf("sessionValidatorFunc: RevokeSession not supported")
+}
+
+// ---------------------------------------------------------------------------
 // BearerScheme
 // ---------------------------------------------------------------------------
 
 func TestNewBearerScheme_DefaultName(t *testing.T) {
-	s := security.NewBearerScheme("", security.BearerValidateFunc(func(token string) (interface{}, error) { return nil, nil }))
+	s := security.NewBearerScheme("", tokenValidatorFunc(func(token string) (interface{}, error) { return nil, nil }))
 	if s.Name() != "bearer" {
 		t.Fatalf("expected default name 'bearer', got %q", s.Name())
 	}
 }
 
 func TestNewBearerScheme_CustomName(t *testing.T) {
-	s := security.NewBearerScheme("jwt", security.BearerValidateFunc(func(token string) (interface{}, error) { return nil, nil }))
+	s := security.NewBearerScheme("jwt", tokenValidatorFunc(func(token string) (interface{}, error) { return nil, nil }))
 	if s.Name() != "jwt" {
 		t.Fatalf("expected name 'jwt', got %q", s.Name())
 	}
 }
 
 func TestBearerScheme_Type(t *testing.T) {
-	s := security.NewBearerScheme("b", security.BearerValidateFunc(func(token string) (interface{}, error) { return nil, nil }))
+	s := security.NewBearerScheme("b", tokenValidatorFunc(func(token string) (interface{}, error) { return nil, nil }))
 	if s.Type() != "http" {
 		t.Fatalf("expected type 'http', got %q", s.Type())
 	}
 }
 
 func TestBearerScheme_Description(t *testing.T) {
-	s := security.NewBearerScheme("b", security.BearerValidateFunc(func(token string) (interface{}, error) { return nil, nil }))
+	s := security.NewBearerScheme("b", tokenValidatorFunc(func(token string) (interface{}, error) { return nil, nil }))
 	if s.Description() != "Bearer token authentication" {
 		t.Fatalf("unexpected description: %q", s.Description())
 	}
 }
 
 func TestBearerScheme_SetDescription(t *testing.T) {
-	s := security.NewBearerScheme("b", security.BearerValidateFunc(func(token string) (interface{}, error) { return nil, nil }))
+	s := security.NewBearerScheme("b", tokenValidatorFunc(func(token string) (interface{}, error) { return nil, nil }))
 	ret := s.SetDescription("custom desc")
 	if ret != s {
 		t.Fatal("SetDescription should return the same pointer for chaining")
@@ -56,14 +80,14 @@ func TestBearerScheme_SetDescription(t *testing.T) {
 }
 
 func TestBearerScheme_BearerFormat(t *testing.T) {
-	s := security.NewBearerScheme("b", security.BearerValidateFunc(func(token string) (interface{}, error) { return nil, nil }))
+	s := security.NewBearerScheme("b", tokenValidatorFunc(func(token string) (interface{}, error) { return nil, nil }))
 	if s.BearerFormat() != "JWT" {
 		t.Fatalf("expected default bearer format 'JWT', got %q", s.BearerFormat())
 	}
 }
 
 func TestBearerScheme_SetBearerFormat(t *testing.T) {
-	s := security.NewBearerScheme("b", security.BearerValidateFunc(func(token string) (interface{}, error) { return nil, nil }))
+	s := security.NewBearerScheme("b", tokenValidatorFunc(func(token string) (interface{}, error) { return nil, nil }))
 	ret := s.SetBearerFormat("opaque")
 	if ret != s {
 		t.Fatal("SetBearerFormat should return the same pointer for chaining")
@@ -74,14 +98,14 @@ func TestBearerScheme_SetBearerFormat(t *testing.T) {
 }
 
 func TestBearerScheme_Challenge(t *testing.T) {
-	s := security.NewBearerScheme("b", security.BearerValidateFunc(func(token string) (interface{}, error) { return nil, nil }))
+	s := security.NewBearerScheme("b", tokenValidatorFunc(func(token string) (interface{}, error) { return nil, nil }))
 	if s.Challenge() != "Bearer" {
 		t.Fatalf("expected 'Bearer', got %q", s.Challenge())
 	}
 }
 
 func TestBearerScheme_Authenticate_MissingHeader(t *testing.T) {
-	s := security.NewBearerScheme("b", security.BearerValidateFunc(func(token string) (interface{}, error) { return token, nil }))
+	s := security.NewBearerScheme("b", tokenValidatorFunc(func(token string) (interface{}, error) { return token, nil }))
 	r := httptest.NewRequest(http.MethodGet, "/", nil)
 
 	_, err := s.Authenticate(r)
@@ -94,7 +118,7 @@ func TestBearerScheme_Authenticate_MissingHeader(t *testing.T) {
 }
 
 func TestBearerScheme_Authenticate_WrongPrefix(t *testing.T) {
-	s := security.NewBearerScheme("b", security.BearerValidateFunc(func(token string) (interface{}, error) { return token, nil }))
+	s := security.NewBearerScheme("b", tokenValidatorFunc(func(token string) (interface{}, error) { return token, nil }))
 	r := httptest.NewRequest(http.MethodGet, "/", nil)
 	r.Header.Set("Authorization", "Basic abc")
 
@@ -108,7 +132,7 @@ func TestBearerScheme_Authenticate_WrongPrefix(t *testing.T) {
 }
 
 func TestBearerScheme_Authenticate_EmptyToken(t *testing.T) {
-	s := security.NewBearerScheme("b", security.BearerValidateFunc(func(token string) (interface{}, error) { return token, nil }))
+	s := security.NewBearerScheme("b", tokenValidatorFunc(func(token string) (interface{}, error) { return token, nil }))
 	r := httptest.NewRequest(http.MethodGet, "/", nil)
 	r.Header.Set("Authorization", "Bearer ")
 
@@ -122,7 +146,7 @@ func TestBearerScheme_Authenticate_EmptyToken(t *testing.T) {
 }
 
 func TestBearerScheme_Authenticate_ValidToken(t *testing.T) {
-	s := security.NewBearerScheme("b", security.BearerValidateFunc(func(token string) (interface{}, error) {
+	s := security.NewBearerScheme("b", tokenValidatorFunc(func(token string) (interface{}, error) {
 		return "user:" + token, nil
 	}))
 	r := httptest.NewRequest(http.MethodGet, "/", nil)
@@ -138,7 +162,7 @@ func TestBearerScheme_Authenticate_ValidToken(t *testing.T) {
 }
 
 func TestBearerScheme_Authenticate_ValidateError(t *testing.T) {
-	s := security.NewBearerScheme("b", security.BearerValidateFunc(func(token string) (interface{}, error) {
+	s := security.NewBearerScheme("b", tokenValidatorFunc(func(token string) (interface{}, error) {
 		return nil, fmt.Errorf("token expired")
 	}))
 	r := httptest.NewRequest(http.MethodGet, "/", nil)
@@ -318,28 +342,28 @@ func TestBasicScheme_Authenticate_EmptyPassword(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestNewAPIKeyScheme_DefaultName(t *testing.T) {
-	s := security.NewAPIKeyScheme("", "X-API-Key", security.APIKeyHeader, security.APIKeyValidateFunc(func(key string) (interface{}, error) { return nil, nil }))
+	s := security.NewAPIKeyScheme("", "X-API-Key", security.APIKeyHeader, keyValidatorFunc(func(key string) (interface{}, error) { return nil, nil }))
 	if s.Name() != "apikey" {
 		t.Fatalf("expected default name 'apikey', got %q", s.Name())
 	}
 }
 
 func TestNewAPIKeyScheme_CustomName(t *testing.T) {
-	s := security.NewAPIKeyScheme("mykey", "X-API-Key", security.APIKeyHeader, security.APIKeyValidateFunc(func(key string) (interface{}, error) { return nil, nil }))
+	s := security.NewAPIKeyScheme("mykey", "X-API-Key", security.APIKeyHeader, keyValidatorFunc(func(key string) (interface{}, error) { return nil, nil }))
 	if s.Name() != "mykey" {
 		t.Fatalf("expected name 'mykey', got %q", s.Name())
 	}
 }
 
 func TestAPIKeyScheme_Type(t *testing.T) {
-	s := security.NewAPIKeyScheme("k", "X-Key", security.APIKeyHeader, security.APIKeyValidateFunc(func(key string) (interface{}, error) { return nil, nil }))
+	s := security.NewAPIKeyScheme("k", "X-Key", security.APIKeyHeader, keyValidatorFunc(func(key string) (interface{}, error) { return nil, nil }))
 	if s.Type() != "apiKey" {
 		t.Fatalf("expected type 'apiKey', got %q", s.Type())
 	}
 }
 
 func TestAPIKeyScheme_Description(t *testing.T) {
-	s := security.NewAPIKeyScheme("k", "X-Key", security.APIKeyHeader, security.APIKeyValidateFunc(func(key string) (interface{}, error) { return nil, nil }))
+	s := security.NewAPIKeyScheme("k", "X-Key", security.APIKeyHeader, keyValidatorFunc(func(key string) (interface{}, error) { return nil, nil }))
 	desc := s.Description()
 	if !strings.Contains(desc, "header") || !strings.Contains(desc, "X-Key") {
 		t.Fatalf("expected description to mention 'header' and 'X-Key', got %q", desc)
@@ -347,26 +371,26 @@ func TestAPIKeyScheme_Description(t *testing.T) {
 }
 
 func TestAPIKeyScheme_ParamName(t *testing.T) {
-	s := security.NewAPIKeyScheme("k", "X-My-Key", security.APIKeyHeader, security.APIKeyValidateFunc(func(key string) (interface{}, error) { return nil, nil }))
+	s := security.NewAPIKeyScheme("k", "X-My-Key", security.APIKeyHeader, keyValidatorFunc(func(key string) (interface{}, error) { return nil, nil }))
 	if s.ParamName() != "X-My-Key" {
 		t.Fatalf("expected 'X-My-Key', got %q", s.ParamName())
 	}
 }
 
 func TestAPIKeyScheme_Location(t *testing.T) {
-	sHeader := security.NewAPIKeyScheme("k", "X-Key", security.APIKeyHeader, security.APIKeyValidateFunc(func(key string) (interface{}, error) { return nil, nil }))
+	sHeader := security.NewAPIKeyScheme("k", "X-Key", security.APIKeyHeader, keyValidatorFunc(func(key string) (interface{}, error) { return nil, nil }))
 	if sHeader.Location() != security.APIKeyHeader {
 		t.Fatalf("expected APIKeyHeader, got %q", sHeader.Location())
 	}
 
-	sQuery := security.NewAPIKeyScheme("k", "api_key", security.APIKeyQuery, security.APIKeyValidateFunc(func(key string) (interface{}, error) { return nil, nil }))
+	sQuery := security.NewAPIKeyScheme("k", "api_key", security.APIKeyQuery, keyValidatorFunc(func(key string) (interface{}, error) { return nil, nil }))
 	if sQuery.Location() != security.APIKeyQuery {
 		t.Fatalf("expected APIKeyQuery, got %q", sQuery.Location())
 	}
 }
 
 func TestAPIKeyScheme_Challenge(t *testing.T) {
-	s := security.NewAPIKeyScheme("k", "X-API-Key", security.APIKeyHeader, security.APIKeyValidateFunc(func(key string) (interface{}, error) { return nil, nil }))
+	s := security.NewAPIKeyScheme("k", "X-API-Key", security.APIKeyHeader, keyValidatorFunc(func(key string) (interface{}, error) { return nil, nil }))
 	ch := s.Challenge()
 	if !strings.Contains(ch, "X-API-Key") || !strings.Contains(ch, "header") {
 		t.Fatalf("expected challenge to contain param name and location, got %q", ch)
@@ -374,7 +398,7 @@ func TestAPIKeyScheme_Challenge(t *testing.T) {
 }
 
 func TestAPIKeyScheme_Authenticate_Header_MissingKey(t *testing.T) {
-	s := security.NewAPIKeyScheme("k", "X-API-Key", security.APIKeyHeader, security.APIKeyValidateFunc(func(key string) (interface{}, error) { return key, nil }))
+	s := security.NewAPIKeyScheme("k", "X-API-Key", security.APIKeyHeader, keyValidatorFunc(func(key string) (interface{}, error) { return key, nil }))
 	r := httptest.NewRequest(http.MethodGet, "/", nil)
 
 	_, err := s.Authenticate(r)
@@ -387,7 +411,7 @@ func TestAPIKeyScheme_Authenticate_Header_MissingKey(t *testing.T) {
 }
 
 func TestAPIKeyScheme_Authenticate_Header_ValidKey(t *testing.T) {
-	s := security.NewAPIKeyScheme("k", "X-API-Key", security.APIKeyHeader, security.APIKeyValidateFunc(func(key string) (interface{}, error) {
+	s := security.NewAPIKeyScheme("k", "X-API-Key", security.APIKeyHeader, keyValidatorFunc(func(key string) (interface{}, error) {
 		return "key:" + key, nil
 	}))
 	r := httptest.NewRequest(http.MethodGet, "/", nil)
@@ -403,7 +427,7 @@ func TestAPIKeyScheme_Authenticate_Header_ValidKey(t *testing.T) {
 }
 
 func TestAPIKeyScheme_Authenticate_Header_ValidateError(t *testing.T) {
-	s := security.NewAPIKeyScheme("k", "X-API-Key", security.APIKeyHeader, security.APIKeyValidateFunc(func(key string) (interface{}, error) {
+	s := security.NewAPIKeyScheme("k", "X-API-Key", security.APIKeyHeader, keyValidatorFunc(func(key string) (interface{}, error) {
 		return nil, fmt.Errorf("invalid API key")
 	}))
 	r := httptest.NewRequest(http.MethodGet, "/", nil)
@@ -419,7 +443,7 @@ func TestAPIKeyScheme_Authenticate_Header_ValidateError(t *testing.T) {
 }
 
 func TestAPIKeyScheme_Authenticate_Query_MissingKey(t *testing.T) {
-	s := security.NewAPIKeyScheme("k", "api_key", security.APIKeyQuery, security.APIKeyValidateFunc(func(key string) (interface{}, error) { return key, nil }))
+	s := security.NewAPIKeyScheme("k", "api_key", security.APIKeyQuery, keyValidatorFunc(func(key string) (interface{}, error) { return key, nil }))
 	r := httptest.NewRequest(http.MethodGet, "/path", nil)
 
 	_, err := s.Authenticate(r)
@@ -432,7 +456,7 @@ func TestAPIKeyScheme_Authenticate_Query_MissingKey(t *testing.T) {
 }
 
 func TestAPIKeyScheme_Authenticate_Query_ValidKey(t *testing.T) {
-	s := security.NewAPIKeyScheme("k", "api_key", security.APIKeyQuery, security.APIKeyValidateFunc(func(key string) (interface{}, error) {
+	s := security.NewAPIKeyScheme("k", "api_key", security.APIKeyQuery, keyValidatorFunc(func(key string) (interface{}, error) {
 		return "qkey:" + key, nil
 	}))
 	r := httptest.NewRequest(http.MethodGet, "/path?api_key=xyz789", nil)
@@ -447,7 +471,7 @@ func TestAPIKeyScheme_Authenticate_Query_ValidKey(t *testing.T) {
 }
 
 func TestAPIKeyScheme_Authenticate_Query_ValidateError(t *testing.T) {
-	s := security.NewAPIKeyScheme("k", "api_key", security.APIKeyQuery, security.APIKeyValidateFunc(func(key string) (interface{}, error) {
+	s := security.NewAPIKeyScheme("k", "api_key", security.APIKeyQuery, keyValidatorFunc(func(key string) (interface{}, error) {
 		return nil, fmt.Errorf("key revoked")
 	}))
 	r := httptest.NewRequest(http.MethodGet, "/path?api_key=revoked", nil)
@@ -462,7 +486,7 @@ func TestAPIKeyScheme_Authenticate_Query_ValidateError(t *testing.T) {
 }
 
 func TestAPIKeyScheme_Authenticate_UnknownLocation(t *testing.T) {
-	s := security.NewAPIKeyScheme("k", "key", security.APIKeyLocation("grpc"), security.APIKeyValidateFunc(func(key string) (interface{}, error) { return key, nil }))
+	s := security.NewAPIKeyScheme("k", "key", security.APIKeyLocation("grpc"), keyValidatorFunc(func(key string) (interface{}, error) { return key, nil }))
 	r := httptest.NewRequest(http.MethodGet, "/", nil)
 
 	_, err := s.Authenticate(r)
@@ -475,7 +499,7 @@ func TestAPIKeyScheme_Authenticate_UnknownLocation(t *testing.T) {
 }
 
 func TestAPIKeyScheme_Authenticate_Cookie_MissingCookie(t *testing.T) {
-	s := security.NewAPIKeyScheme("k", "session_id", security.APIKeyCookie, security.APIKeyValidateFunc(func(key string) (interface{}, error) { return key, nil }))
+	s := security.NewAPIKeyScheme("k", "session_id", security.APIKeyCookie, keyValidatorFunc(func(key string) (interface{}, error) { return key, nil }))
 	r := httptest.NewRequest(http.MethodGet, "/", nil)
 
 	_, err := s.Authenticate(r)
@@ -488,7 +512,7 @@ func TestAPIKeyScheme_Authenticate_Cookie_MissingCookie(t *testing.T) {
 }
 
 func TestAPIKeyScheme_Authenticate_Cookie_ValidKey(t *testing.T) {
-	s := security.NewAPIKeyScheme("k", "session_id", security.APIKeyCookie, security.APIKeyValidateFunc(func(key string) (interface{}, error) {
+	s := security.NewAPIKeyScheme("k", "session_id", security.APIKeyCookie, keyValidatorFunc(func(key string) (interface{}, error) {
 		return "session:" + key, nil
 	}))
 	r := httptest.NewRequest(http.MethodGet, "/", nil)
@@ -504,7 +528,7 @@ func TestAPIKeyScheme_Authenticate_Cookie_ValidKey(t *testing.T) {
 }
 
 func TestAPIKeyScheme_Authenticate_Cookie_ValidateError(t *testing.T) {
-	s := security.NewAPIKeyScheme("k", "session_id", security.APIKeyCookie, security.APIKeyValidateFunc(func(key string) (interface{}, error) {
+	s := security.NewAPIKeyScheme("k", "session_id", security.APIKeyCookie, keyValidatorFunc(func(key string) (interface{}, error) {
 		return nil, fmt.Errorf("session expired")
 	}))
 	r := httptest.NewRequest(http.MethodGet, "/", nil)
@@ -524,21 +548,21 @@ func TestAPIKeyScheme_Authenticate_Cookie_ValidateError(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestNewSessionCookieScheme_DefaultName(t *testing.T) {
-	s := security.NewSessionCookieScheme("", "", security.SessionValidateFunc(func(id string) (interface{}, error) { return nil, nil }))
+	s := security.NewSessionCookieScheme("", "", sessionValidatorFunc(func(id string) (interface{}, error) { return nil, nil }))
 	if s.Name() != "sessionCookie" {
 		t.Fatalf("expected default name 'sessionCookie', got %q", s.Name())
 	}
 }
 
 func TestNewSessionCookieScheme_DefaultCookieName(t *testing.T) {
-	s := security.NewSessionCookieScheme("", "", security.SessionValidateFunc(func(id string) (interface{}, error) { return nil, nil }))
+	s := security.NewSessionCookieScheme("", "", sessionValidatorFunc(func(id string) (interface{}, error) { return nil, nil }))
 	if s.CookieName() != "session_id" {
 		t.Fatalf("expected default cookie name 'session_id', got %q", s.CookieName())
 	}
 }
 
 func TestNewSessionCookieScheme_CustomFields(t *testing.T) {
-	s := security.NewSessionCookieScheme("bff", "sid", security.SessionValidateFunc(func(id string) (interface{}, error) { return nil, nil }))
+	s := security.NewSessionCookieScheme("bff", "sid", sessionValidatorFunc(func(id string) (interface{}, error) { return nil, nil }))
 	if s.Name() != "bff" {
 		t.Fatalf("expected name 'bff', got %q", s.Name())
 	}
@@ -548,35 +572,35 @@ func TestNewSessionCookieScheme_CustomFields(t *testing.T) {
 }
 
 func TestSessionCookieScheme_Type(t *testing.T) {
-	s := security.NewSessionCookieScheme("s", "sid", security.SessionValidateFunc(func(id string) (interface{}, error) { return nil, nil }))
+	s := security.NewSessionCookieScheme("s", "sid", sessionValidatorFunc(func(id string) (interface{}, error) { return nil, nil }))
 	if s.Type() != "apiKey" {
 		t.Fatalf("expected type 'apiKey', got %q", s.Type())
 	}
 }
 
 func TestSessionCookieScheme_Location(t *testing.T) {
-	s := security.NewSessionCookieScheme("s", "sid", security.SessionValidateFunc(func(id string) (interface{}, error) { return nil, nil }))
+	s := security.NewSessionCookieScheme("s", "sid", sessionValidatorFunc(func(id string) (interface{}, error) { return nil, nil }))
 	if s.Location() != "cookie" {
 		t.Fatalf("expected location 'cookie', got %q", s.Location())
 	}
 }
 
 func TestSessionCookieScheme_ParamName(t *testing.T) {
-	s := security.NewSessionCookieScheme("s", "my_session", security.SessionValidateFunc(func(id string) (interface{}, error) { return nil, nil }))
+	s := security.NewSessionCookieScheme("s", "my_session", sessionValidatorFunc(func(id string) (interface{}, error) { return nil, nil }))
 	if s.ParamName() != "my_session" {
 		t.Fatalf("expected param name 'my_session', got %q", s.ParamName())
 	}
 }
 
 func TestSessionCookieScheme_Challenge_Empty(t *testing.T) {
-	s := security.NewSessionCookieScheme("s", "sid", security.SessionValidateFunc(func(id string) (interface{}, error) { return nil, nil }))
+	s := security.NewSessionCookieScheme("s", "sid", sessionValidatorFunc(func(id string) (interface{}, error) { return nil, nil }))
 	if s.Challenge() != "" {
 		t.Fatalf("expected empty challenge, got %q", s.Challenge())
 	}
 }
 
 func TestSessionCookieScheme_SetDescription(t *testing.T) {
-	s := security.NewSessionCookieScheme("s", "sid", security.SessionValidateFunc(func(id string) (interface{}, error) { return nil, nil }))
+	s := security.NewSessionCookieScheme("s", "sid", sessionValidatorFunc(func(id string) (interface{}, error) { return nil, nil }))
 	ret := s.SetDescription("BFF session")
 	if ret != s {
 		t.Fatal("SetDescription should return the same pointer for chaining")
@@ -587,7 +611,7 @@ func TestSessionCookieScheme_SetDescription(t *testing.T) {
 }
 
 func TestSessionCookieScheme_Authenticate_MissingCookie(t *testing.T) {
-	s := security.NewSessionCookieScheme("s", "sid", security.SessionValidateFunc(func(id string) (interface{}, error) { return id, nil }))
+	s := security.NewSessionCookieScheme("s", "sid", sessionValidatorFunc(func(id string) (interface{}, error) { return id, nil }))
 	r := httptest.NewRequest(http.MethodGet, "/", nil)
 
 	_, err := s.Authenticate(r)
@@ -600,7 +624,7 @@ func TestSessionCookieScheme_Authenticate_MissingCookie(t *testing.T) {
 }
 
 func TestSessionCookieScheme_Authenticate_EmptyCookieValue(t *testing.T) {
-	s := security.NewSessionCookieScheme("s", "sid", security.SessionValidateFunc(func(id string) (interface{}, error) { return id, nil }))
+	s := security.NewSessionCookieScheme("s", "sid", sessionValidatorFunc(func(id string) (interface{}, error) { return id, nil }))
 	r := httptest.NewRequest(http.MethodGet, "/", nil)
 	r.AddCookie(&http.Cookie{Name: "sid", Value: ""})
 
@@ -614,7 +638,7 @@ func TestSessionCookieScheme_Authenticate_EmptyCookieValue(t *testing.T) {
 }
 
 func TestSessionCookieScheme_Authenticate_ValidSession(t *testing.T) {
-	s := security.NewSessionCookieScheme("s", "sid", security.SessionValidateFunc(func(id string) (interface{}, error) {
+	s := security.NewSessionCookieScheme("s", "sid", sessionValidatorFunc(func(id string) (interface{}, error) {
 		return map[string]string{"user": id}, nil
 	}))
 	r := httptest.NewRequest(http.MethodGet, "/", nil)
@@ -634,7 +658,7 @@ func TestSessionCookieScheme_Authenticate_ValidSession(t *testing.T) {
 }
 
 func TestSessionCookieScheme_Authenticate_ValidateError(t *testing.T) {
-	s := security.NewSessionCookieScheme("s", "sid", security.SessionValidateFunc(func(id string) (interface{}, error) {
+	s := security.NewSessionCookieScheme("s", "sid", sessionValidatorFunc(func(id string) (interface{}, error) {
 		return nil, fmt.Errorf("session not found")
 	}))
 	r := httptest.NewRequest(http.MethodGet, "/", nil)
@@ -650,7 +674,7 @@ func TestSessionCookieScheme_Authenticate_ValidateError(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// SessionCookieScheme — store-backed lifecycle (WithStore, IssueSession, RevokeSession)
+// SessionCookieScheme — store-backed lifecycle (NewSessionStoreValidator, IssueSession, RevokeSession)
 // ---------------------------------------------------------------------------
 
 // mockSessionStore is an in-memory SessionStore for testing.
@@ -692,11 +716,11 @@ func (m *mockSessionStore) Delete(_ context.Context, id string) error {
 	return nil
 }
 
-func TestSessionCookieScheme_WithStore_Authenticate_UsesStore(t *testing.T) {
+func TestSessionCookieScheme_StoreValidator_Authenticate_UsesStore(t *testing.T) {
 	store := newMockStore()
 	store.data["known-session"] = map[string]string{"user": "alice"}
 
-	s := security.NewSessionCookieScheme("s", "sid", nil).WithStore(store)
+	s := security.NewSessionCookieScheme("s", "sid", security.NewSessionStoreValidator(store))
 	r := httptest.NewRequest(http.MethodGet, "/", nil)
 	r.AddCookie(&http.Cookie{Name: "sid", Value: "known-session"})
 
@@ -710,11 +734,11 @@ func TestSessionCookieScheme_WithStore_Authenticate_UsesStore(t *testing.T) {
 	}
 }
 
-func TestSessionCookieScheme_WithStore_Authenticate_StoreError(t *testing.T) {
+func TestSessionCookieScheme_StoreValidator_Authenticate_StoreError(t *testing.T) {
 	store := newMockStore()
 	store.getErr = fmt.Errorf("session expired")
 
-	s := security.NewSessionCookieScheme("s", "sid", nil).WithStore(store)
+	s := security.NewSessionCookieScheme("s", "sid", security.NewSessionStoreValidator(store))
 	r := httptest.NewRequest(http.MethodGet, "/", nil)
 	r.AddCookie(&http.Cookie{Name: "sid", Value: "old-session"})
 
@@ -734,16 +758,16 @@ func TestSessionCookieScheme_Authenticate_NoStoreNoValidate(t *testing.T) {
 
 	_, err := s.Authenticate(r)
 	if err == nil {
-		t.Fatal("expected error when no store or validate func configured")
+		t.Fatal("expected error when no validator configured")
 	}
-	if !strings.Contains(err.Error(), "no store or validate func") {
+	if !strings.Contains(err.Error(), "no validator configured") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
 func TestSessionCookieScheme_IssueSession_WritesSetCookieAndStoresSession(t *testing.T) {
 	store := newMockStore()
-	s := security.NewSessionCookieScheme("s", "sid", nil).WithStore(store)
+	s := security.NewSessionCookieScheme("s", "sid", security.NewSessionStoreValidator(store))
 
 	w := httptest.NewRecorder()
 	principal := map[string]string{"user": "bob"}
@@ -788,9 +812,9 @@ func TestSessionCookieScheme_IssueSession_NoStore_Error(t *testing.T) {
 
 	_, err := s.IssueSession(context.Background(), w, map[string]string{})
 	if err == nil {
-		t.Fatal("expected error when no store attached")
+		t.Fatal("expected error when no validator configured")
 	}
-	if !strings.Contains(err.Error(), "no SessionStore attached") {
+	if !strings.Contains(err.Error(), "no validator configured") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -798,7 +822,7 @@ func TestSessionCookieScheme_IssueSession_NoStore_Error(t *testing.T) {
 func TestSessionCookieScheme_IssueSession_StoreSetError(t *testing.T) {
 	store := newMockStore()
 	store.setErr = fmt.Errorf("db unavailable")
-	s := security.NewSessionCookieScheme("s", "sid", nil).WithStore(store)
+	s := security.NewSessionCookieScheme("s", "sid", security.NewSessionStoreValidator(store))
 
 	w := httptest.NewRecorder()
 	_, err := s.IssueSession(context.Background(), w, "principal")
@@ -812,7 +836,7 @@ func TestSessionCookieScheme_IssueSession_StoreSetError(t *testing.T) {
 
 func TestSessionCookieScheme_IssueSession_SessionID_IsUnique(t *testing.T) {
 	store := newMockStore()
-	s := security.NewSessionCookieScheme("s", "sid", nil).WithStore(store)
+	s := security.NewSessionCookieScheme("s", "sid", security.NewSessionStoreValidator(store))
 	w1, w2 := httptest.NewRecorder(), httptest.NewRecorder()
 
 	id1, _ := s.IssueSession(context.Background(), w1, "p1")
@@ -824,8 +848,7 @@ func TestSessionCookieScheme_IssueSession_SessionID_IsUnique(t *testing.T) {
 
 func TestSessionCookieScheme_IssueSession_WithCookieOptions(t *testing.T) {
 	store := newMockStore()
-	s := security.NewSessionCookieScheme("s", "sid", nil).
-		WithStore(store).
+	s := security.NewSessionCookieScheme("s", "sid", security.NewSessionStoreValidator(store)).
 		WithCookieOptions(security.CookieOptions{
 			MaxAge:   3600,
 			Path:     "/api",
@@ -866,7 +889,7 @@ func TestSessionCookieScheme_IssueSession_WithCookieOptions(t *testing.T) {
 func TestSessionCookieScheme_RevokeSession_ClearsSessionAndCookie(t *testing.T) {
 	store := newMockStore()
 	store.data["live-session"] = map[string]string{"user": "carol"}
-	s := security.NewSessionCookieScheme("s", "sid", nil).WithStore(store)
+	s := security.NewSessionCookieScheme("s", "sid", security.NewSessionStoreValidator(store))
 
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodDelete, "/", nil)
@@ -898,7 +921,7 @@ func TestSessionCookieScheme_RevokeSession_ClearsSessionAndCookie(t *testing.T) 
 
 func TestSessionCookieScheme_RevokeSession_NoCookieIsNoOp(t *testing.T) {
 	store := newMockStore()
-	s := security.NewSessionCookieScheme("s", "sid", nil).WithStore(store)
+	s := security.NewSessionCookieScheme("s", "sid", security.NewSessionStoreValidator(store))
 
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodDelete, "/", nil) // no cookie
@@ -912,7 +935,7 @@ func TestSessionCookieScheme_RevokeSession_StoreDeleteError(t *testing.T) {
 	store := newMockStore()
 	store.data["some-session"] = "principal"
 	store.delErr = fmt.Errorf("db write failed")
-	s := security.NewSessionCookieScheme("s", "sid", nil).WithStore(store)
+	s := security.NewSessionCookieScheme("s", "sid", security.NewSessionStoreValidator(store))
 
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodDelete, "/", nil)

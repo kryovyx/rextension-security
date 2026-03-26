@@ -18,7 +18,7 @@ func TestNewDefaultConfig(t *testing.T) {
 }
 
 func TestWithScheme(t *testing.T) {
-	scheme := security.NewBearerScheme("test", security.BearerValidateFunc(func(token string) (interface{}, error) {
+	scheme := security.NewBearerScheme("test", tokenValidatorFunc(func(token string) (interface{}, error) {
 		return nil, nil
 	}))
 
@@ -35,7 +35,7 @@ func TestWithScheme(t *testing.T) {
 }
 
 func TestWithScheme_Multiple(t *testing.T) {
-	s1 := security.NewBearerScheme("bearer", security.BearerValidateFunc(func(token string) (interface{}, error) {
+	s1 := security.NewBearerScheme("bearer", tokenValidatorFunc(func(token string) (interface{}, error) {
 		return nil, nil
 	}))
 	s2 := security.NewBasicScheme("basic", "realm", func(u, p string) (interface{}, error) {
@@ -62,7 +62,7 @@ func TestNewConfig_NoOptions(t *testing.T) {
 }
 
 func TestNewConfig_WithOptions(t *testing.T) {
-	scheme := security.NewBearerScheme("jwt", security.BearerValidateFunc(func(token string) (interface{}, error) {
+	scheme := security.NewBearerScheme("jwt", tokenValidatorFunc(func(token string) (interface{}, error) {
 		return nil, nil
 	}))
 
@@ -76,10 +76,10 @@ func TestNewConfig_WithOptions(t *testing.T) {
 }
 
 func TestNewConfig_MultipleOptions(t *testing.T) {
-	s1 := security.NewBearerScheme("bearer", security.BearerValidateFunc(func(token string) (interface{}, error) {
+	s1 := security.NewBearerScheme("bearer", tokenValidatorFunc(func(token string) (interface{}, error) {
 		return nil, nil
 	}))
-	s2 := security.NewAPIKeyScheme("apikey", "X-API-Key", security.APIKeyHeader, security.APIKeyValidateFunc(func(key string) (interface{}, error) {
+	s2 := security.NewAPIKeyScheme("apikey", "X-API-Key", security.APIKeyHeader, keyValidatorFunc(func(key string) (interface{}, error) {
 		return nil, nil
 	}))
 
@@ -93,9 +93,9 @@ func TestNewConfig_MultipleOptions(t *testing.T) {
 func TestConfig_SchemesField(t *testing.T) {
 	cfg := &security.Config{
 		Schemes: []security.SecurityScheme{
-			security.NewBearerScheme("b", security.BearerValidateFunc(func(token string) (interface{}, error) { return nil, nil })),
+			security.NewBearerScheme("b", tokenValidatorFunc(func(token string) (interface{}, error) { return nil, nil })),
 			security.NewBasicScheme("a", "", func(u, p string) (interface{}, error) { return nil, nil }),
-			security.NewAPIKeyScheme("k", "key", security.APIKeyQuery, security.APIKeyValidateFunc(func(k string) (interface{}, error) { return nil, nil })),
+			security.NewAPIKeyScheme("k", "key", security.APIKeyQuery, keyValidatorFunc(func(k string) (interface{}, error) { return nil, nil })),
 		},
 	}
 	if len(cfg.Schemes) != 3 {

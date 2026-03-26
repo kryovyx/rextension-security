@@ -31,8 +31,7 @@ type APIKeyScheme struct {
 
 // NewAPIKeyScheme creates an API key authentication scheme.
 // paramName is the header or query parameter name (e.g., "X-API-Key").
-// validate must implement KeyValidator; use APIKeyValidateFunc to wrap a plain
-// function: security.APIKeyValidateFunc(myFunc).
+// validate must implement KeyValidator.
 func NewAPIKeyScheme(name, paramName string, location APIKeyLocation, validate KeyValidator) *APIKeyScheme {
 	if name == "" {
 		name = "apikey"

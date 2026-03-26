@@ -5,8 +5,6 @@ package security
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"fmt"
 	"net/http"
 )
@@ -52,18 +50,17 @@ type SessionCookieScheme struct {
 	cookieName    string
 	description   string
 	validate      SessionValidator
-	store         SessionStore
 	cookieOptions CookieOptions
 }
 
 // NewSessionCookieScheme creates a session-cookie authentication scheme.
 // name is the unique scheme identifier registered with the security extension.
 // cookieName is the HTTP cookie name that carries the session ID (e.g. "session_id").
-// validate is the SessionValidator used to authenticate requests when no
-// SessionStore is attached via WithStore. Pass nil when using WithStore only.
-// Use SessionValidateFunc to wrap a plain function:
+// validate is the SessionValidator used for the full session lifecycle.
+// Use NewSessionStoreValidator to wrap a plain SessionStore:
 //
-// security.SessionValidateFunc(func(id string) (interface{}, error) { ... })
+//	validator := security.NewSessionStoreValidator(myStore)
+//	scheme := security.NewSessionCookieScheme("bff", "session_id", validator)
 func NewSessionCookieScheme(name, cookieName string, validate SessionValidator) *SessionCookieScheme {
 	if name == "" {
 		name = "sessionCookie"
@@ -104,15 +101,6 @@ func (s *SessionCookieScheme) SetDescription(desc string) *SessionCookieScheme {
 	return s
 }
 
-// WithStore attaches a SessionStore to the scheme.
-// When a store is attached, Authenticate calls store.Get(ctx, sessionID)
-// instead of the SessionValidator, and IssueSession / RevokeSession use the
-// store for session persistence.
-func (s *SessionCookieScheme) WithStore(store SessionStore) *SessionCookieScheme {
-	s.store = store
-	return s
-}
-
 // WithCookieOptions replaces the cookie attributes used by IssueSession.
 // By default HttpOnly is true and SameSite is Lax.
 func (s *SessionCookieScheme) WithCookieOptions(opts CookieOptions) *SessionCookieScheme {
@@ -123,33 +111,16 @@ func (s *SessionCookieScheme) WithCookieOptions(opts CookieOptions) *SessionCook
 // IssueSession creates a new session for principal and writes a Set-Cookie
 // header on w. It returns the session ID.
 //
-// When a SessionStore is attached via WithStore, IssueSession generates a
-// cryptographically random 64-hex-character session ID and persists the
-// principal in the store.
-//
-// When a SessionValidator is passed to NewSessionCookieScheme, IssueSession
-// delegates ID generation and storage to validator.IssueSession.
-//
-// At least one of a SessionStore or a SessionValidator must be configured.
+// IssueSession delegates ID generation and storage to the SessionValidator
+// provided to NewSessionCookieScheme. Use NewSessionStoreValidator to wrap a
+// plain SessionStore.
 func (s *SessionCookieScheme) IssueSession(ctx context.Context, w http.ResponseWriter, principal interface{}) (string, error) {
-	var sessionID string
-	if s.store != nil {
-		b := make([]byte, 32)
-		if _, err := rand.Read(b); err != nil {
-			return "", fmt.Errorf("SessionCookieScheme: failed to generate session ID: %w", err)
-		}
-		sessionID = hex.EncodeToString(b)
-		if err := s.store.Set(ctx, sessionID, principal); err != nil {
-			return "", fmt.Errorf("SessionCookieScheme: failed to store session: %w", err)
-		}
-	} else if s.validate != nil {
-		var err error
-		sessionID, err = s.validate.IssueSession(ctx, principal)
-		if err != nil {
-			return "", fmt.Errorf("SessionCookieScheme: validator failed to issue session: %w", err)
-		}
-	} else {
-		return "", fmt.Errorf("SessionCookieScheme: no SessionStore attached — call WithStore first")
+	if s.validate == nil {
+		return "", fmt.Errorf("SessionCookieScheme: no validator configured — pass a SessionValidator to NewSessionCookieScheme")
+	}
+	sessionID, err := s.validate.IssueSession(ctx, principal)
+	if err != nil {
+		return "", fmt.Errorf("SessionCookieScheme: validator failed to issue session: %w", err)
 	}
 
 	opts := s.cookieOptions
@@ -175,22 +146,16 @@ func (s *SessionCookieScheme) IssueSession(ctx context.Context, w http.ResponseW
 }
 
 // RevokeSession reads the session cookie from the request, removes the session
-// from the attached SessionStore or via the SessionValidator, and clears the
-// cookie in the response. If the cookie is absent it is a no-op.
+// via the SessionValidator, and clears the cookie in the response.
+// If the cookie is absent it is a no-op.
 func (s *SessionCookieScheme) RevokeSession(ctx context.Context, w http.ResponseWriter, r *http.Request) error {
 	c, err := r.Cookie(s.cookieName)
 	if err != nil {
 		return nil
 	}
-	if c.Value != "" {
-		if s.store != nil {
-			if err := s.store.Delete(ctx, c.Value); err != nil {
-				return fmt.Errorf("SessionCookieScheme: failed to delete session: %w", err)
-			}
-		} else if s.validate != nil {
-			if err := s.validate.RevokeSession(ctx, c.Value); err != nil {
-				return fmt.Errorf("SessionCookieScheme: validator failed to revoke session: %w", err)
-			}
+	if c.Value != "" && s.validate != nil {
+		if err := s.validate.RevokeSession(ctx, c.Value); err != nil {
+			return fmt.Errorf("SessionCookieScheme: validator failed to revoke session: %w", err)
 		}
 	}
 	http.SetCookie(w, &http.Cookie{
@@ -213,11 +178,8 @@ func (s *SessionCookieScheme) Authenticate(r *http.Request) (interface{}, error)
 	if sessionID == "" {
 		return nil, fmt.Errorf("empty session cookie %q", s.cookieName)
 	}
-	if s.store != nil {
-		return s.store.Get(r.Context(), sessionID)
-	}
 	if s.validate == nil {
-		return nil, fmt.Errorf("SessionCookieScheme: no store or validate func configured")
+		return nil, fmt.Errorf("SessionCookieScheme: no validator configured")
 	}
 	return s.validate.ValidateSession(r.Context(), sessionID)
 }
