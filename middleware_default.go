@@ -62,6 +62,32 @@ func SecurityMiddleware(cfg MiddlewareConfig) func(http.Handler) http.Handler {
 				// Store the principal from this scheme.
 				r = r.WithContext(context.WithValue(r.Context(), ContextKeyPrincipal, principal))
 				r = r.WithContext(context.WithValue(r.Context(), ContextKeySchemeName, schemeName))
+
+				// Scope enforcement (optional — only when the route declares scopes and
+				// the scheme implements ScopeValidator).
+				if scopedRoute, ok := sr.(ScopedSecuredRoute); ok {
+					if scopes := scopedRoute.RequiredScopes()[schemeName]; len(scopes) > 0 {
+						if sv, ok := scheme.(ScopeValidator); ok {
+							if err := sv.ValidateScopes(r, principal, scopes); err != nil {
+								http.Error(w, "403 Forbidden: "+err.Error(), http.StatusForbidden)
+								return
+							}
+						}
+					}
+				}
+
+				// Role enforcement (optional — only when the route declares roles and
+				// the scheme implements RoleValidator).
+				if roleRoute, ok := sr.(RoleGuardedRoute); ok {
+					if roles := roleRoute.RequiredRoles()[schemeName]; len(roles) > 0 {
+						if rv, ok := scheme.(RoleValidator); ok {
+							if err := rv.ValidateRoles(r, principal, roles); err != nil {
+								http.Error(w, "403 Forbidden: "+err.Error(), http.StatusForbidden)
+								return
+							}
+						}
+					}
+				}
 			}
 
 			next.ServeHTTP(w, r)

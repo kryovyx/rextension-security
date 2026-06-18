@@ -14,6 +14,7 @@ type BearerScheme struct {
 	name         string
 	description  string
 	bearerFormat string
+	rolesClaim   string
 	validate     TokenValidator
 }
 
@@ -50,6 +51,19 @@ func (s *BearerScheme) SetDescription(desc string) *BearerScheme {
 	return s
 }
 
+// SetRolesClaim sets the JWT claim name that carries role/permission values
+// (e.g. "permissions", "realm_access.roles"). This is used purely for
+// documentation purposes: the rextension-openapi generator emits it as
+// x-roles-claim on the security scheme object so UI tooling can surface it.
+func (s *BearerScheme) SetRolesClaim(claim string) *BearerScheme {
+	s.rolesClaim = claim
+	return s
+}
+
+// RolesClaim returns the configured JWT claim name for roles documentation.
+// Implements the openapi.RoleClaimProvider interface (duck-typed, no import needed).
+func (s *BearerScheme) RolesClaim() string { return s.rolesClaim }
+
 func (s *BearerScheme) Authenticate(r *http.Request) (interface{}, error) {
 	auth := r.Header.Get("Authorization")
 	if auth == "" {
@@ -67,3 +81,23 @@ func (s *BearerScheme) Authenticate(r *http.Request) (interface{}, error) {
 }
 
 func (s *BearerScheme) Challenge() string { return "Bearer" }
+
+// ValidateScopes implements ScopeValidator by delegating to the inner TokenValidator
+// if it also implements ScopeValidator. Schemes whose validators do not implement
+// ScopeValidator skip scope enforcement silently (backward compatible).
+func (s *BearerScheme) ValidateScopes(r *http.Request, principal interface{}, requiredScopes []string) error {
+	if sv, ok := s.validate.(ScopeValidator); ok {
+		return sv.ValidateScopes(r, principal, requiredScopes)
+	}
+	return nil
+}
+
+// ValidateRoles implements RoleValidator by delegating to the inner TokenValidator
+// if it also implements RoleValidator. Schemes whose validators do not implement
+// RoleValidator skip role enforcement silently (backward compatible).
+func (s *BearerScheme) ValidateRoles(r *http.Request, principal interface{}, requiredRoles []string) error {
+	if rv, ok := s.validate.(RoleValidator); ok {
+		return rv.ValidateRoles(r, principal, requiredRoles)
+	}
+	return nil
+}
