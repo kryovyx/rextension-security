@@ -42,9 +42,15 @@ func (m *mockPlainRoute) Handler() rxroute.HandlerFunc { return nil }
 // Helpers
 // ---------------------------------------------------------------------------
 
-func buildMiddleware(schemes []security.SecurityScheme, routes []rxroute.Route) func(http.Handler) http.Handler {
-	cfg := security.NewTestMiddlewareConfig(schemes, routes)
+func buildMiddleware(schemes []security.SecurityScheme) func(http.Handler) http.Handler {
+	cfg := security.NewTestMiddlewareConfig(schemes)
 	return security.SecurityMiddleware(cfg)
+}
+
+// withRoute stores rt as the matched route on req, mirroring what the rex
+// router does in ServeHTTP before handing off to the middleware chain.
+func withRoute(req *http.Request, rt rxroute.Route) *http.Request {
+	return req.WithContext(rxroute.SetMatchedRoute(req.Context(), rt))
 }
 
 func nextOK(called *bool) http.Handler {
@@ -56,21 +62,22 @@ func nextOK(called *bool) http.Handler {
 }
 
 // ---------------------------------------------------------------------------
-// Tests: Route not in index -> passthrough
+// Tests: No matched route in context -> passthrough
 // ---------------------------------------------------------------------------
 
-func TestSecurityMiddleware_RouteNotInIndex(t *testing.T) {
-	mw := buildMiddleware(nil, nil) // empty index
+func TestSecurityMiddleware_NoMatchedRoute(t *testing.T) {
+	mw := buildMiddleware(nil)
 
 	called := false
 	handler := mw(nextOK(&called))
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/not-registered", nil)
+	// No matched route set in context.
 	handler.ServeHTTP(rec, req)
 
 	if !called {
-		t.Fatal("expected next handler to be called for unregistered route")
+		t.Fatal("expected next handler to be called when no matched route in context")
 	}
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", rec.Code)
@@ -78,40 +85,38 @@ func TestSecurityMiddleware_RouteNotInIndex(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Tests: Route in index but plain route (not SecuredRoute) is not registered
+// Tests: Matched route does not implement SecuredRoute -> passthrough
 // ---------------------------------------------------------------------------
 
-func TestSecurityMiddleware_PlainRouteNotIndexed(t *testing.T) {
+func TestSecurityMiddleware_PlainRoute(t *testing.T) {
 	plainRoute := &mockPlainRoute{method: "GET", path: "/public"}
-	mw := buildMiddleware(nil, []rxroute.Route{plainRoute})
+	mw := buildMiddleware(nil)
 
 	called := false
 	handler := mw(nextOK(&called))
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/public", nil)
+	req := withRoute(httptest.NewRequest(http.MethodGet, "/public", nil), plainRoute)
 	handler.ServeHTTP(rec, req)
 
-	// Plain routes don't implement SecuredRoute, so they are NOT registered
-	// in the index and should pass through.
 	if !called {
 		t.Fatal("expected next handler to be called for plain (non-secured) route")
 	}
 }
 
 // ---------------------------------------------------------------------------
-// Tests: Route in index, empty RequiredSchemes -> public passthrough
+// Tests: SecuredRoute with empty RequiredSchemes -> public passthrough
 // ---------------------------------------------------------------------------
 
 func TestSecurityMiddleware_EmptyRequiredSchemes(t *testing.T) {
 	secRoute := &mockSecuredRoute{method: "GET", path: "/open", schemes: []string{}}
-	mw := buildMiddleware(nil, []rxroute.Route{secRoute})
+	mw := buildMiddleware(nil)
 
 	called := false
 	handler := mw(nextOK(&called))
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/open", nil)
+	req := withRoute(httptest.NewRequest(http.MethodGet, "/open", nil), secRoute)
 	handler.ServeHTTP(rec, req)
 
 	if !called {
@@ -123,7 +128,7 @@ func TestSecurityMiddleware_EmptyRequiredSchemes(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Tests: Route in index, auth succeeds -> principal stored, next called
+// Tests: Auth succeeds -> principal stored, next called
 // ---------------------------------------------------------------------------
 
 func TestSecurityMiddleware_AuthSuccess(t *testing.T) {
@@ -131,10 +136,7 @@ func TestSecurityMiddleware_AuthSuccess(t *testing.T) {
 		return "user:" + token, nil
 	}))
 	secRoute := &mockSecuredRoute{method: "GET", path: "/protected", schemes: []string{"bearer"}}
-	mw := buildMiddleware(
-		[]security.SecurityScheme{scheme},
-		[]rxroute.Route{secRoute},
-	)
+	mw := buildMiddleware([]security.SecurityScheme{scheme})
 
 	var capturedPrincipal interface{}
 	var capturedScheme string
@@ -146,7 +148,7 @@ func TestSecurityMiddleware_AuthSuccess(t *testing.T) {
 
 	handler := mw(inner)
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/protected", nil)
+	req := withRoute(httptest.NewRequest(http.MethodGet, "/protected", nil), secRoute)
 	req.Header.Set("Authorization", "Bearer validtoken")
 	handler.ServeHTTP(rec, req)
 
@@ -162,7 +164,7 @@ func TestSecurityMiddleware_AuthSuccess(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Tests: Route in index, auth fails -> 401 with WWW-Authenticate
+// Tests: Auth fails -> 401 with WWW-Authenticate
 // ---------------------------------------------------------------------------
 
 func TestSecurityMiddleware_AuthFailure(t *testing.T) {
@@ -170,16 +172,13 @@ func TestSecurityMiddleware_AuthFailure(t *testing.T) {
 		return nil, fmt.Errorf("invalid token")
 	}))
 	secRoute := &mockSecuredRoute{method: "POST", path: "/secret", schemes: []string{"bearer"}}
-	mw := buildMiddleware(
-		[]security.SecurityScheme{scheme},
-		[]rxroute.Route{secRoute},
-	)
+	mw := buildMiddleware([]security.SecurityScheme{scheme})
 
 	called := false
 	handler := mw(nextOK(&called))
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/secret", nil)
+	req := withRoute(httptest.NewRequest(http.MethodPost, "/secret", nil), secRoute)
 	req.Header.Set("Authorization", "Bearer badtoken")
 	handler.ServeHTTP(rec, req)
 
@@ -204,16 +203,13 @@ func TestSecurityMiddleware_AuthFailure_MissingHeader(t *testing.T) {
 		return "ok", nil
 	}))
 	secRoute := &mockSecuredRoute{method: "GET", path: "/guarded", schemes: []string{"bearer"}}
-	mw := buildMiddleware(
-		[]security.SecurityScheme{scheme},
-		[]rxroute.Route{secRoute},
-	)
+	mw := buildMiddleware([]security.SecurityScheme{scheme})
 
 	called := false
 	handler := mw(nextOK(&called))
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/guarded", nil)
+	req := withRoute(httptest.NewRequest(http.MethodGet, "/guarded", nil), secRoute)
 	// No Authorization header.
 	handler.ServeHTTP(rec, req)
 
@@ -226,22 +222,18 @@ func TestSecurityMiddleware_AuthFailure_MissingHeader(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Tests: Route in index, unknown scheme -> 500
+// Tests: Unknown scheme -> 500
 // ---------------------------------------------------------------------------
 
 func TestSecurityMiddleware_UnknownScheme(t *testing.T) {
-	// Register no schemes but route requires one.
 	secRoute := &mockSecuredRoute{method: "GET", path: "/mystery", schemes: []string{"nonexistent"}}
-	mw := buildMiddleware(
-		nil, // no schemes registered
-		[]rxroute.Route{secRoute},
-	)
+	mw := buildMiddleware(nil) // no schemes registered
 
 	called := false
 	handler := mw(nextOK(&called))
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/mystery", nil)
+	req := withRoute(httptest.NewRequest(http.MethodGet, "/mystery", nil), secRoute)
 	handler.ServeHTTP(rec, req)
 
 	if called {
@@ -257,7 +249,7 @@ func TestSecurityMiddleware_UnknownScheme(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Tests: Multiple schemes - first succeeds
+// Tests: Multiple schemes - all succeed
 // ---------------------------------------------------------------------------
 
 func TestSecurityMiddleware_MultipleSchemes_AllSucceed(t *testing.T) {
@@ -273,10 +265,7 @@ func TestSecurityMiddleware_MultipleSchemes_AllSucceed(t *testing.T) {
 		path:    "/multi",
 		schemes: []string{"bearer", "apikey"},
 	}
-	mw := buildMiddleware(
-		[]security.SecurityScheme{bearerScheme, apiKeyScheme},
-		[]rxroute.Route{secRoute},
-	)
+	mw := buildMiddleware([]security.SecurityScheme{bearerScheme, apiKeyScheme})
 
 	var capturedPrincipal interface{}
 	var capturedScheme string
@@ -288,7 +277,7 @@ func TestSecurityMiddleware_MultipleSchemes_AllSucceed(t *testing.T) {
 
 	handler := mw(inner)
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/multi", nil)
+	req := withRoute(httptest.NewRequest(http.MethodGet, "/multi", nil), secRoute)
 	req.Header.Set("Authorization", "Bearer tok")
 	req.Header.Set("X-API-Key", "key123")
 	handler.ServeHTTP(rec, req)
@@ -322,16 +311,13 @@ func TestSecurityMiddleware_MultipleSchemes_SecondFails(t *testing.T) {
 		path:    "/multi-fail",
 		schemes: []string{"bearer", "apikey"},
 	}
-	mw := buildMiddleware(
-		[]security.SecurityScheme{bearerScheme, apiKeyScheme},
-		[]rxroute.Route{secRoute},
-	)
+	mw := buildMiddleware([]security.SecurityScheme{bearerScheme, apiKeyScheme})
 
 	called := false
 	handler := mw(nextOK(&called))
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/multi-fail", nil)
+	req := withRoute(httptest.NewRequest(http.MethodGet, "/multi-fail", nil), secRoute)
 	req.Header.Set("Authorization", "Bearer goodtoken")
 	req.Header.Set("X-API-Key", "badkey")
 	handler.ServeHTTP(rec, req)
@@ -345,6 +331,40 @@ func TestSecurityMiddleware_MultipleSchemes_SecondFails(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// Tests: Route with path parameters is enforced correctly
+// ---------------------------------------------------------------------------
+
+func TestSecurityMiddleware_PathParamRoute(t *testing.T) {
+	scheme := security.NewBearerScheme("bearer", tokenValidatorFunc(func(token string) (interface{}, error) {
+		return "authed", nil
+	}))
+	// Route template has a path parameter — the router resolves the actual ID.
+	secRoute := &mockSecuredRoute{method: "POST", path: "/connections/{connectionId}/licenses", schemes: []string{"bearer"}}
+	mw := buildMiddleware([]security.SecurityScheme{scheme})
+
+	var capturedPrincipal interface{}
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedPrincipal, _ = security.GetPrincipal(r)
+		w.WriteHeader(http.StatusOK)
+	})
+
+	// The router stores the matched route in context before middleware runs,
+	// so the actual URL with a concrete ID is irrelevant here.
+	handler := mw(inner)
+	rec := httptest.NewRecorder()
+	req := withRoute(httptest.NewRequest(http.MethodPost, "/internal/connections/abc-123/licenses", nil), secRoute)
+	req.Header.Set("Authorization", "Bearer tok")
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	if capturedPrincipal != "authed" {
+		t.Fatalf("expected 'authed' principal, got %v", capturedPrincipal)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Tests: Different HTTP methods on same path
 // ---------------------------------------------------------------------------
 
@@ -353,29 +373,25 @@ func TestSecurityMiddleware_DifferentMethods(t *testing.T) {
 		return "authed", nil
 	}))
 	getRoute := &mockSecuredRoute{method: "GET", path: "/resource", schemes: []string{"bearer"}}
-	// POST is not registered as a secured route.
+	mw := buildMiddleware([]security.SecurityScheme{scheme})
 
-	mw := buildMiddleware(
-		[]security.SecurityScheme{scheme},
-		[]rxroute.Route{getRoute},
-	)
-
-	// GET /resource without auth -> 401
+	// GET /resource with the secured route in context -> 401 (no auth header)
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/resource", nil)
 	called := false
+	req := withRoute(httptest.NewRequest(http.MethodGet, "/resource", nil), getRoute)
 	mw(nextOK(&called)).ServeHTTP(rec, req)
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("GET expected 401, got %d", rec.Code)
 	}
 
-	// POST /resource -> passthrough (not in index)
+	// POST /resource -> no matched route in context -> passthrough
 	rec = httptest.NewRecorder()
-	req = httptest.NewRequest(http.MethodPost, "/resource", nil)
 	called = false
+	req = httptest.NewRequest(http.MethodPost, "/resource", nil)
+	// No withRoute call — router would not have matched a POST route.
 	mw(nextOK(&called)).ServeHTTP(rec, req)
 	if !called {
-		t.Fatal("POST should pass through since it's not in the index")
+		t.Fatal("POST should pass through when no matched route in context")
 	}
 }
 
@@ -391,10 +407,7 @@ func TestSecurityMiddleware_BasicScheme(t *testing.T) {
 		return nil, fmt.Errorf("bad creds")
 	})
 	secRoute := &mockSecuredRoute{method: "GET", path: "/basic", schemes: []string{"basic"}}
-	mw := buildMiddleware(
-		[]security.SecurityScheme{scheme},
-		[]rxroute.Route{secRoute},
-	)
+	mw := buildMiddleware([]security.SecurityScheme{scheme})
 
 	var capturedPrincipal interface{}
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -403,7 +416,7 @@ func TestSecurityMiddleware_BasicScheme(t *testing.T) {
 	})
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/basic", nil)
+	req := withRoute(httptest.NewRequest(http.MethodGet, "/basic", nil), secRoute)
 	req.SetBasicAuth("admin", "pass")
 	mw(inner).ServeHTTP(rec, req)
 

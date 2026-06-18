@@ -4,14 +4,8 @@
 // Package security provides a Rex extension for authentication and authorization
 // using pluggable security schemes.
 //
-// This file defines the middleware interfaces, route index, and context keys.
+// This file defines the middleware interfaces and the scheme registry.
 package security
-
-import (
-	"sync"
-
-	rxevent "github.com/kryovyx/rextension/event"
-)
 
 // Context keys for security data in request context.
 type contextKey string
@@ -49,35 +43,7 @@ func (r *schemeRegistry) all() []SecurityScheme {
 	return r.ordered
 }
 
-// securedRouteIndex stores the SecuredRoute information for registered routes.
-type securedRouteIndex struct {
-	mu     sync.RWMutex
-	routes map[string]SecuredRoute
-}
-
-func newSecuredRouteIndex() *securedRouteIndex {
-	return &securedRouteIndex{routes: make(map[string]SecuredRoute)}
-}
-
-func (ri *securedRouteIndex) register(rt rxevent.Route) {
-	if sr, ok := rt.(SecuredRoute); ok {
-		key := rt.Method() + " " + rt.Path()
-		ri.mu.Lock()
-		ri.routes[key] = sr
-		ri.mu.Unlock()
-	}
-}
-
-func (ri *securedRouteIndex) lookup(method, path string) (SecuredRoute, bool) {
-	key := method + " " + path
-	ri.mu.RLock()
-	sr, ok := ri.routes[key]
-	ri.mu.RUnlock()
-	return sr, ok
-}
-
 // MiddlewareConfig holds runtime dependencies for the security middleware.
 type MiddlewareConfig struct {
-	RouteIndex     *securedRouteIndex
 	SchemeRegistry *schemeRegistry
 }

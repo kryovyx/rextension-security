@@ -12,6 +12,8 @@ import (
 	"context"
 	"net/http"
 	"strings"
+
+	rxroute "github.com/kryovyx/rextension/route"
 )
 
 // SecurityMiddleware creates a standard HTTP middleware that enforces
@@ -19,8 +21,15 @@ import (
 func SecurityMiddleware(cfg MiddlewareConfig) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			sr, found := cfg.RouteIndex.lookup(r.Method, r.URL.Path)
+			rt, found := rxroute.GetMatchedRoute(r)
 			if !found {
+				next.ServeHTTP(w, r)
+				return
+			}
+
+			sr, ok := rt.(SecuredRoute)
+			if !ok {
+				// Route does not declare security requirements.
 				next.ServeHTTP(w, r)
 				return
 			}

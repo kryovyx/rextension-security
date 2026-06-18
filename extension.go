@@ -16,14 +16,12 @@ import (
 	"context"
 
 	rx "github.com/kryovyx/rextension"
-	rxevent "github.com/kryovyx/rextension/event"
 )
 
 // SecurityExtension implements the Rex extension contract for authentication.
 type SecurityExtension struct {
 	cfg      Config
 	logger   rx.Logger
-	index    *securedRouteIndex
 	registry *schemeRegistry
 }
 
@@ -43,34 +41,19 @@ func WithSecurity(cfg *Config) rx.Option {
 	return rx.WithExtension(NewSecurityExtension(cfg))
 }
 
-// OnInitialize sets up the security infrastructure and event subscriptions.
+// OnInitialize sets up the security infrastructure and registers the middleware.
 func (e *SecurityExtension) OnInitialize(ctx context.Context, r rx.Rex) error {
 	e.logger = r.Logger()
-	e.index = newSecuredRouteIndex()
 	e.registry = newSchemeRegistry(e.cfg.Schemes)
 
-	// Subscribe to route registration events to build the secured route index.
-	r.EventBus().Subscribe(rxevent.EventTypeRouterRouteRegistered, func(ev rxevent.Event) {
-		if routeEv, ok := rxevent.As[rxevent.RouterRouteRegisteredEvent](ev); ok {
-			e.index.register(routeEv.Route)
-			if sr, isSec := routeEv.Route.(SecuredRoute); isSec {
-				e.logger.Info("Registered security for route %s %s: schemes=%v",
-					routeEv.Route.Method(), routeEv.Route.Path(), sr.RequiredSchemes())
-			}
-		}
-	})
-
-	// Register the security middleware.
-	mwCfg := MiddlewareConfig{
-		RouteIndex:     e.index,
+	r.Use(SecurityMiddleware(MiddlewareConfig{
 		SchemeRegistry: e.registry,
-	}
-	r.Use(SecurityMiddleware(mwCfg))
+	}))
 
 	// Expose the scheme registry and the extension itself via DI so other extensions
 	// (e.g., OpenAPI) can access the schemes for documentation.
 	r.Container().Instance(e.registry)
-	r.Container().Instance(e) // Register self so OpenAPI can call Schemes()
+	r.Container().Instance(e)
 
 	e.logger.Info("Security extension initialized with %d scheme(s)", len(e.cfg.Schemes))
 
@@ -84,7 +67,7 @@ func (e *SecurityExtension) OnStart(ctx context.Context, r rx.Rex) error {
 	if len(e.cfg.Schemes) > 0 {
 		schemes := make([]rx.SecuritySchemeAccessor, len(e.cfg.Schemes))
 		for i, s := range e.cfg.Schemes {
-			schemes[i] = s // SecurityScheme satisfies rx.SecuritySchemeAccessor
+			schemes[i] = s
 		}
 		rx.RegisterSecuritySchemes(schemes)
 		e.logger.Info("Security: Registered %d schemes via rextension registry", len(schemes))
